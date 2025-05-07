@@ -8,3 +8,4 @@ users_metadata.json
 comments_extracted_*.json
 .venv
 venv
+*.png
