@@ -1,3 +1,8 @@
 Resources/
 NeurIPS-Template/
 .DS_Store
+*.csv
+subreddits_metadata.json
+users_metadata.json
+*.bz2
+comments_extracted_*.json

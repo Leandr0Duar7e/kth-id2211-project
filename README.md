@@ -1,0 +1,1 @@
+install networkx pandas numpy bz2file
