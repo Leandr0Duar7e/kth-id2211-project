@@ -1,0 +1,31 @@
+=== COMMUNITY DETECTION COMPARATIVE REPORT (2010) ===
+
+--- NETWORK STATISTICS ---
+Number of nodes (subreddits): 21
+Number of edges (connections): 28
+
+--- ALGORITHM PERFORMANCE ---
+Louvain Modularity: 0.017901187148730124
+Spectral Modularity: 0.0
+Louvain Purity: 1.0
+Spectral Purity: 1.0
+Louvain NMI: 1.0
+Spectral NMI: 1.0
+
+--- COMMUNITY STRUCTURE ---
+Louvain Communities: 3
+Spectral Communities: 1 (k=1)
+
+--- COMMUNITY-PARTY BREAKDOWN ---
+Louvain Communities:
+  Community 2: {'dem': 1}
+  Community 1: {}
+  Community 0: {}
+
+Spectral Communities:
+  Community 0: {'dem': 1}
+
+--- CONCLUSION ---
+Better modularity: Louvain
+Better purity: Spectral
+Better NMI: Spectral

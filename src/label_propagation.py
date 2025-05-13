@@ -1,4 +1,3 @@
-import os
 import networkx as nx
 import json
 import pandas as pd
@@ -7,186 +6,402 @@ from sklearn.semi_supervised import LabelSpreading
 import matplotlib.pyplot as plt
 import seaborn as sns
 from pathlib import Path
-import glob
-from src.io.load_networks import load_network
+
+# Corrected import assuming utils.py is in the same directory (src)
+# For a package structure, this relative import is appropriate.
+from utils import load_network, load_subreddit_metadata, ensure_dir, get_project_root
 
 
+class LabelPropagator:
+    """
+    Performs label propagation on a network to predict node labels based on a
+    set of seed labels.
+    """
 
-def load_subreddit_metadata(metadata_file, seed = "party"):
-    """Load subreddit metadata and extract party information from JSONL format."""
-    seed_labels = {}
+    def __init__(
+        self,
+        alpha: float = 0.8,
+        max_iter: int = 1000,
+        kernel: str = "knn",
+        random_state: int | None = None,
+    ):
+        """
+        Initializes the LabelPropagator.
 
-    with open(metadata_file, 'r') as f:
-        for line in f:
+        Args:
+            alpha (float): Clamping factor. A higher alpha means more reliance on initial labels.
+            max_iter (int): Maximum number of iterations.
+            kernel (str): Kernel to use ('knn' or 'rbf'). 'knn' is generally good for graph-based propagation.
+            random_state (int | None): Seed for reproducibility.
+        """
+        self.alpha = alpha
+        self.max_iter = max_iter
+        self.kernel = kernel
+        self.random_state = random_state
+
+        # Initialize model based on parameters that are supported by the scikit-learn version
+        model_params = {
+            "kernel": self.kernel,
+            "alpha": self.alpha,
+            "max_iter": self.max_iter,
+            "n_jobs": -1,  # Use all available cores
+        }
+
+        # Only add random_state if it's not None
+        if self.random_state is not None:
+            # Check scikit-learn version to determine if random_state is supported
             try:
-                data = json.loads(line.strip())
-                if seed in data and data[seed]:
-                    seed_labels[data['subreddit']] = data[seed]
-            except json.JSONDecodeError:
-                continue
+                # Some scikit-learn versions might not support random_state
+                self.model = LabelSpreading(
+                    random_state=self.random_state, **model_params
+                )
+            except TypeError:
+                print(
+                    "Warning: Your scikit-learn version does not support random_state for LabelSpreading."
+                )
+                self.model = LabelSpreading(**model_params)
+        else:
+            self.model = LabelSpreading(**model_params)
 
-    return seed_labels
+        self.nodes_ = None
+        self.node_to_idx_ = None
+        self.label_to_num_ = None
+        self.num_to_label_ = None
+        self.propagated_labels_numeric_ = None
+        self.G_ = None  # To store the graph used for fitting/visualization
 
-def prepare_label_propagation(G, seed_labels):
-    """Prepare data for label propagation."""
-    # Create a mapping of node names to indices
-    nodes = list(G.nodes())
-    node_to_idx = {node: idx for idx, node in enumerate(nodes)}
+    def _prepare_data(self, G: nx.Graph, seed_labels: dict):
+        """
+        Prepares data for label propagation: creates adjacency matrix,
+        initial label array, and mappings.
+        """
+        self.G_ = G  # Store graph for later use (e.g. visualization)
+        self.nodes_ = list(G.nodes())
+        if not self.nodes_:
+            # This case should ideally be handled before calling fit,
+            # but good to have a safeguard.
+            print("Warning: Graph has no nodes. Cannot prepare data.")
+            return None, None  # Indicate failure to prepare
 
-    # Create the adjacency matrix
-    A = nx.adjacency_matrix(G).toarray()
+        self.node_to_idx_ = {node: idx for idx, node in enumerate(self.nodes_)}
 
-    # Create label array (-1 for unlabeled)
-    y = np.full(len(nodes), -1)
+        A = nx.adjacency_matrix(G, nodelist=self.nodes_).toarray()
+        y_initial = np.full(len(self.nodes_), -1, dtype=int)  # -1 for unlabeled
 
-    # Create a mapping of party strings to numeric values
-    unique_labels = sorted(set(seed_labels.values()))
-    label_to_num = {party: idx for idx, party in enumerate(unique_labels)}
+        unique_string_labels = sorted(
+            list(
+                set(
+                    str_label
+                    for str_label in seed_labels.values()
+                    if str_label is not None
+                )
+            )
+        )
 
-    # Set seed labels with numeric values
-    for node, label in seed_labels.items():
-        if node in node_to_idx:
-            y[node_to_idx[node]] = label_to_num[label]
+        if not unique_string_labels:
+            print(
+                "Warning: No valid string labels found in seed_labels. All nodes will be treated as unlabeled initially."
+            )
 
-    return A, y, nodes, label_to_num
+        self.label_to_num_ = {label: i for i, label in enumerate(unique_string_labels)}
+        self.num_to_label_ = {i: label for label, i in self.label_to_num_.items()}
 
-def perform_label_propagation(A, y, alpha=0.8, max_iter=1000, kernel = "knn"):
-    """Perform label propagation using scikit-learn's LabelSpreading."""
-    label_prop_model = LabelSpreading(kernel=kernel, alpha=alpha, max_iter=max_iter)
-    label_prop_model.fit(A, y)
-    return label_prop_model.transduction_
+        seeds_in_graph_count = 0
+        for node, str_label in seed_labels.items():
+            if (
+                node in self.node_to_idx_
+                and str_label is not None
+                and str_label in self.label_to_num_
+            ):
+                y_initial[self.node_to_idx_[node]] = self.label_to_num_[str_label]
+                seeds_in_graph_count += 1
 
-def save_results(nodes, labels, label_to_num, output_file):
-    """Save the propagation results to a file."""
-    # Create reverse mapping for numeric labels to party names
-    num_to_label = {v: k for k, v in label_to_num.items()}
+        if unique_string_labels and seeds_in_graph_count == 0:
+            print(
+                "Warning: None of the provided seed labels correspond to nodes in the graph."
+            )
+        elif unique_string_labels:
+            print(f"Initialized {seeds_in_graph_count} seed labels in the graph.")
 
-    # Convert numeric labels back to party names
-    predicted_labels = [num_to_label[label] if label != -1 else "unknown" for label in labels]
+        return A, y_initial
 
-    results = pd.DataFrame({
-        'subreddit': nodes,
-        'predicted_label': predicted_labels
-    })
-    results.to_csv(output_file, index=False)
-    return results
+    def fit(self, G: nx.Graph, seed_labels: dict):
+        """
+        Fits the label propagation model to the graph and seed labels.
+        """
+        if not G.nodes():
+            print("Warning: Input graph is empty. Skipping fitting.")
+            self.propagated_labels_numeric_ = np.array([], dtype=int)
+            self.nodes_ = []
+            self.G_ = G  # Store the empty graph
+            return
 
+        A, y_initial = self._prepare_data(G, seed_labels)
 
-def visualize_results(G, labels, label_to_num, output_file):
-    """Create a visualization of the network with party labels."""
-    plt.figure(figsize=(12, 8))
+        if A is None:  # Data preparation failed (e.g. graph had no nodes initially)
+            self.propagated_labels_numeric_ = np.array([], dtype=int)
+            return
 
-    # Create reverse mapping for numeric labels to party names
-    num_to_label = {v: k for k, v in label_to_num.items()}
+        if np.all(y_initial == -1):
+            print(
+                "Warning: No initial labels could be assigned to graph nodes. "
+                "LabelSpreading will treat all nodes as unlabeled."
+            )
+            # sklearn's LabelSpreading can handle y with all -1, often resulting in one dominant cluster
+            # or behavior dependent on the unlabelled data structure.
 
-    # Create a color map for parties
-    unique_labels = np.unique(labels)
-    colors = sns.color_palette("husl", len(unique_labels))
-    color_map = {label: colors[i] for i, label in enumerate(unique_labels)}
+        self.model.fit(A, y_initial)
+        self.propagated_labels_numeric_ = self.model.transduction_
 
-    # Create node colors
-    node_colors = [color_map[label] for label in labels]
+    def predict(self) -> pd.DataFrame:
+        """
+        Returns the propagated labels as a DataFrame.
+        """
+        if (
+            self.propagated_labels_numeric_ is None
+            or self.nodes_ is None
+            or not self.nodes_
+        ):
+            # This implies fit wasn't called, graph was empty, or preparation failed
+            print(
+                "Warning: Model not fitted or graph is empty. Returning empty DataFrame."
+            )
+            return pd.DataFrame(columns=["subreddit", "predicted_label"])
 
-    # Draw the network
-    pos = nx.spring_layout(G, k=1, iterations=50)
-    nx.draw_networkx_nodes(G, pos, node_color=node_colors, node_size=50, alpha=0.6)
-    nx.draw_networkx_edges(G, pos, alpha=0.2)
+        # Ensure num_to_label_ is available; it might not be if no valid seed labels were given
+        if self.num_to_label_ is None:
+            # This state implies _prepare_data was called but found no unique_string_labels
+            # All propagated_labels_numeric_ should be -1 or what the model defaults to
+            # We will map all to "unknown"
+            predicted_str_labels = ["unknown"] * len(self.propagated_labels_numeric_)
+        else:
+            predicted_str_labels = [
+                self.num_to_label_.get(label_num, "unknown")
+                for label_num in self.propagated_labels_numeric_
+            ]
 
-    # Add legend
-    legend_elements = [plt.Line2D([0], [0], marker='o', color='w',
-                                  markerfacecolor=color, label=num_to_label[label],
-                                  markersize=10)
-                       for label, color in color_map.items()]
-    plt.legend(handles=legend_elements, title="Labels")
+        results_df = pd.DataFrame(
+            {"subreddit": self.nodes_, "predicted_label": predicted_str_labels}
+        )
+        return results_df
 
-    plt.title("Subreddit Network with Propagated Labels")
-    plt.axis('off')
-    plt.savefig(output_file, dpi=300, bbox_inches='tight')
+    def save_results(self, output_file_path: Path):
+        """
+        Saves the propagation results to a CSV file.
+        """
+        results_df = self.predict()
+        if not results_df.empty:
+            ensure_dir(output_file_path.parent)
+            results_df.to_csv(output_file_path, index=False)
+            print(f"Label propagation results saved to {output_file_path}")
+        else:
+            print(
+                f"No results to save for {output_file_path.name} (possibly due to empty graph or failed fit)."
+            )
+
+    def visualize_results(self, output_file_path: Path, **kwargs):
+        """
+        Creates and saves a visualization of the network with propagated labels.
+        """
+        if (
+            self.G_ is None
+            or not self.G_.nodes()
+            or self.propagated_labels_numeric_ is None
+        ):
+            print(
+                f"Cannot visualize: Graph or labels not available. Skipping visualization for {output_file_path.name}"
+            )
+            return
+
+        plt.figure(figsize=kwargs.get("figsize", (15, 12)))
+
+        unique_numeric_propagated_labels = sorted(
+            np.unique(self.propagated_labels_numeric_)
+        )
+
+        # Determine string labels and color mapping
+        # Handles cases: 1) no seed labels (all unknown), 2) seed labels exist
+        str_labels_for_legend = {}
+        if not self.num_to_label_:  # Case 1: No seed labels were processed
+            palette = sns.color_palette("pastel", 1)
+            str_labels_for_legend["unknown"] = palette[0]
+            # Map all numeric labels (likely -1 or a single cluster from LabelSpreading) to "unknown"
+            color_map_numeric = {
+                num_label: palette[0] for num_label in unique_numeric_propagated_labels
+            }
+        else:  # Case 2: Seed labels were processed
+            # Get all unique string labels that appeared in the output
+            present_str_labels = sorted(
+                list(
+                    set(
+                        self.num_to_label_.get(l, "unknown")
+                        for l in unique_numeric_propagated_labels
+                    )
+                )
+            )
+            palette = sns.color_palette("husl", len(present_str_labels))
+            str_labels_for_legend = {
+                str_label: palette[i] for i, str_label in enumerate(present_str_labels)
+            }
+
+            color_map_numeric = {}
+            for num_label in unique_numeric_propagated_labels:
+                str_l = self.num_to_label_.get(num_label, "unknown")
+                color_map_numeric[num_label] = str_labels_for_legend[str_l]
+
+        node_colors = [
+            color_map_numeric.get(label_num, str_labels_for_legend.get("unknown"))
+            for label_num in self.propagated_labels_numeric_
+        ]
+
+        # Layout parameters
+        pos_k = (
+            kwargs.get("k", 0.15 / np.sqrt(len(self.G_))) if len(self.G_) > 0 else 0.15
+        )
+        iterations = kwargs.get("iterations", 30)
+        node_size = kwargs.get("node_size", 50 if len(self.G_) < 500 else 20)
+        alpha_nodes = kwargs.get("alpha_nodes", 0.8)
+        alpha_edges = kwargs.get("alpha_edges", 0.3)
+        edge_width = kwargs.get("edge_width", 0.6)
+
+        try:
+            pos = nx.spring_layout(
+                self.G_, k=pos_k, iterations=iterations, seed=self.random_state
+            )
+        except (
+            Exception
+        ) as e:  # Broad exception for layout issues (e.g. disconnected, too few nodes)
+            print(
+                f"Spring layout failed ({e}), attempting random layout for {output_file_path.name}."
+            )
+            pos = nx.random_layout(self.G_, seed=self.random_state)
+
+        nx.draw_networkx_nodes(
+            self.G_, pos, node_color=node_colors, node_size=node_size, alpha=alpha_nodes
+        )
+        nx.draw_networkx_edges(self.G_, pos, alpha=alpha_edges, width=edge_width)
+
+        if str_labels_for_legend:
+            legend_elements = [
+                plt.Line2D(
+                    [0],
+                    [0],
+                    marker="o",
+                    color="w",
+                    markerfacecolor=color,
+                    label=str_label,
+                    markersize=8,
+                )
+                for str_label, color in str_labels_for_legend.items()
+            ]
+            plt.legend(
+                handles=legend_elements,
+                title="Predicted Labels",
+                loc="best",
+                fontsize="small",
+            )
+
+        title = kwargs.get(
+            "title", f"Network with Propagated Labels ({output_file_path.stem})"
+        )
+        plt.title(title, fontsize=14)
+        plt.axis("off")
+
+        ensure_dir(output_file_path.parent)
+        plt.savefig(output_file_path, dpi=300, bbox_inches="tight")
     plt.close()
-
-
-def process_label_prop(network_file, metadata_file, output_dir, year, label):
-    """Process a single network file and create visualizations."""
-    print(f"\nProcessing network for year {year}...")
-
-    # Load data
-    print("Loading network...")
-    G = load_network(network_file)
-
-    print("Loading metadata...")
-    seed_labels = load_subreddit_metadata(metadata_file, seed = label)
-
-    # Prepare and perform label propagation
-    print("Preparing label propagation...")
-    A, y, nodes, label_to_num = prepare_label_propagation(G, seed_labels)
-
-    print("Performing label propagation...")
-    propagated_labels = perform_label_propagation(A, y)
-
-    # Save results
-    print("Saving results...")
-    results = save_results(nodes, propagated_labels, label_to_num,
-                           output_dir / f"propagated_labels_{year}.csv")
-
-    # Create visualization
-    print("Creating visualization...")
-    visualize_results(G, propagated_labels, label_to_num,
-                      output_dir / f"network_visualization_{year}.png")
-
-    return results
-
-def pipeline(label: str):
-    # Define paths
-    base_path = Path(os.path.abspath("../data"))
-    networks_dir = base_path / "networks"
-    metadata_file = base_path / "metadata" / "subreddits_metadata.json"
-    output_dir = base_path / "processed"
-    output_dir.mkdir(exist_ok=True)
-
-    # Find all network files
-    network_files = sorted(glob.glob(str(networks_dir / "networks_*.csv")))
-
-    if not network_files:
-        print("No network files found!")
-        return
-
-    # Process each network file
-    all_results = {}
-    for network_file in network_files:
-        # Extract year from filename
-        year = Path(network_file).stem.split('_')[1]
-        print(f"\nProcessing year {year}")
-
-        # Process the network
-        results = process_label_prop(network_file, metadata_file, output_dir, year, label=label)
-        all_results[year] = results
-
-    # Create summary statistics
-    print("\nCreating summary statistics...")
-    summary = pd.DataFrame()
-
-    for year, results in all_results.items():
-        # Count subreddits per party
-        party_counts = results['predicted_label'].value_counts()
-        party_counts.name = year
-        summary = pd.concat([summary, party_counts], axis=1)
-
-    # Save summary statistics
-    summary.to_csv(output_dir / "label_distribution_summary.csv")
-
-    # Create summary visualization
-    plt.figure(figsize=(12, 6))
-    summary.plot(kind='bar', stacked=True)
-    plt.title(f"Distribution of {label} Over Years")
-    plt.xlabel(f"{label}")
-    plt.ylabel("Number of Subreddits")
-    plt.xticks(rotation=45)
-    plt.tight_layout()
-    plt.savefig(output_dir / f"{label}_distribution_summary.png", dpi=300, bbox_inches='tight')
-    plt.close()
-
-    print("\nDone! Results saved in:", output_dir)
+        print(f"Label propagation visualization saved to {output_file_path}")
+    
 
 if __name__ == "__main__":
-    # print(load_subreddit_metadata("../data/subreddits_metadata.json"))
-    pipeline("party")
+    project_root = get_project_root()
+    print(f"Running LabelPropagator example from project root: {project_root}")
+
+    # Define paths using project_root, consistent with utils.py structure
+    data_dir = project_root / "data"
+    dummy_networks_dir = data_dir / "networks"
+    dummy_metadata_dir = data_dir / "metadata"
+    output_lp_dir = data_dir / "processed" / "label_propagation"
+
+    ensure_dir(output_lp_dir)
+
+    # Dummy files (paths defined as in utils.py for consistency)
+    dummy_network_file = (
+        dummy_networks_dir / "dummy_network_2024.csv"
+    )  # Changed name for clarity
+    dummy_metadata_file = dummy_metadata_dir / "dummy_subreddits_metadata.jsonl"
+
+    # Create dummy files if they don't exist (similar to utils.py for standalone test)
+    ensure_dir(dummy_networks_dir)
+    ensure_dir(dummy_metadata_dir)
+
+    if not dummy_network_file.exists():
+        print(f"Creating dummy network file for testing: {dummy_network_file}")
+        network_content = """node_1,node_2,weighted,unweighted
+subA,subB,5,1
+subB,subC,10,1
+subA,subC,0,0
+subC,subD,3,1
+subD,subE,2,1
+subE,subF,7,1
+subX,subY,2,1
+subY,subZ,3,1
+subP,subQ,1,1
+"""
+        with open(dummy_network_file, "w") as f:
+            f.write(network_content)
+
+    if not dummy_metadata_file.exists():
+        print(f"Creating dummy metadata file for testing: {dummy_metadata_file}")
+        metadata_content = """{"subreddit": "subA", "party": "dem"}
+{"subreddit": "subB", "party": "dem"}
+{"subreddit": "subC", "party": "rep"}
+{"subreddit": "subF", "party": "dem"}
+{"subreddit": "subX", "party": "neutral"}
+{"subreddit": "subP", "party": "rep"}
+{"subreddit": "nonExistentNode", "party": "dem"}
+"""
+        with open(dummy_metadata_file, "w") as f:
+            f.write(metadata_content)
+
+    print(f"\n--- Testing LabelPropagator for year 2024 (dummy data) ---")
+    year_tag = "2024_dummy_lp_test"
+
+    print(f"Loading unweighted network: {dummy_network_file}")
+    # Label Propagation uses unweighted networks as per plan
+    graph = load_network(dummy_network_file, weighted=False)
+    print(f"Graph: {len(graph.nodes())} nodes, {len(graph.edges())} edges.")
+
+    if not graph.nodes():
+        print("Loaded graph is empty. LabelPropagator test cannot proceed.")
+    else:
+        print(f"Loading metadata: {dummy_metadata_file}")
+        seed_labels_map = load_subreddit_metadata(dummy_metadata_file, seed_key="party")
+        print(f"Seed labels loaded: {len(seed_labels_map)} entries.")
+
+        current_year_output_dir = output_lp_dir / year_tag
+        ensure_dir(current_year_output_dir)
+
+        propagator = LabelPropagator(alpha=0.85, max_iter=500, random_state=42)
+
+        print("\nFitting LabelPropagator...")
+        propagator.fit(graph, seed_labels_map)
+
+        print("\nPredicting labels...")
+        results_df = propagator.predict()
+
+        if not results_df.empty:
+            print("\nPropagated Labels (first 5 and last 5):")
+            print(pd.concat([results_df.head(), results_df.tail()]))
+
+            output_csv = current_year_output_dir / f"propagated_labels_{year_tag}.csv"
+            propagator.save_results(output_csv)
+
+            output_png = (
+                current_year_output_dir / f"network_visualization_{year_tag}.png"
+            )
+            propagator.visualize_results(output_png, k=0.2, node_size=70)
+        else:
+            print("No prediction results to display or save.")
+
+    print("\nLabelPropagator example test complete.")
