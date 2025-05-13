@@ -1,3 +1,5 @@
+import os
+
 import networkx as nx
 import json
 import pandas as pd
@@ -7,24 +9,13 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from pathlib import Path
 import glob
+from src.io.load_networks import load_network
 
-def load_network(network_file):
-    """Load the network from a CSV file with source, target, weighted, and unweighted columns."""
-    df = pd.read_csv(network_file)
-    
-    G = nx.DiGraph()
-    
-    for _, row in df.iterrows():
-        G.add_edge(row.iloc[0], row.iloc[1], 
-                  weight=row.iloc[2], 
-                  unweighted=row.iloc[3])  
-    
-    return G
 
 def load_subreddit_metadata(metadata_file):
     """Load subreddit metadata and extract party information from JSONL format."""
     party_labels = {}
-    
+
     with open(metadata_file, 'r') as f:
         for line in f:
             try:
@@ -33,7 +24,7 @@ def load_subreddit_metadata(metadata_file):
                     party_labels[data['subreddit']] = data['party']
             except json.JSONDecodeError:
                 continue
-    
+
     return party_labels
 
 def prepare_label_propagation(G, seed_labels):
@@ -144,7 +135,7 @@ def process_network(network_file, metadata_file, output_dir, year):
 
 def main():
     # Define paths
-    base_path = Path("data")
+    base_path = Path(os.path.abspath("../data"))
     networks_dir = base_path / "networks"
     metadata_file = base_path / "metadata" / "subreddits_metadata.json"
     output_dir = base_path / "processed"
@@ -195,4 +186,5 @@ def main():
     print("\nDone! Results saved in:", output_dir)
 
 if __name__ == "__main__":
-    main() 
+    #print(load_subreddit_metadata("../data/subreddits_metadata.json"))
+    main()
