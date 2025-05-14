@@ -5,11 +5,11 @@ Number of nodes (subreddits): 412
 Number of edges (connections): 2536
 
 --- ALGORITHM PERFORMANCE ---
-Louvain Modularity: 0.21790761150007404
+Louvain Modularity: 0.22035835977028068
 Spectral Modularity: 0.0
 Louvain Purity: 0.9772727272727273
 Spectral Purity: 0.7727272727272727
-Louvain NMI: 0.6819301007402602
+Louvain NMI: 0.7565452084051505
 Spectral NMI: 0.0
 
 --- COMMUNITY STRUCTURE ---
@@ -19,13 +19,13 @@ Spectral Communities: 1 (k=1)
 --- COMMUNITY-PARTY BREAKDOWN ---
 Louvain Communities:
   Community 0: {'rep': 9}
-  Community 1: {'dem': 31, 'rep': 1}
-  Community 3: {'dem': 3}
-  Community 4: {}
+  Community 1: {'dem': 33, 'rep': 1}
+  Community 4: {'dem': 1}
+  Community 3: {}
   Community 2: {}
 
 Spectral Communities:
-  Community 0: {'dem': 34, 'rep': 10}
+  Community 0: {'rep': 10, 'dem': 34}
 
 --- CONCLUSION ---
 Better modularity: Louvain

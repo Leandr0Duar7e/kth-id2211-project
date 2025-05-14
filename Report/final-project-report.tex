@@ -20,9 +20,7 @@
 \usepackage{cite}
 \usepackage{subcaption}
 \usepackage{lineno}
-
-% Activate line numbers
-\linenumbers
+\usepackage{todonotes}
 
 \title{Temporal Evolution of Political Communities on Reddit: A Graph-Based Analysis}
 
@@ -33,15 +31,15 @@
   \And
   Leandro Duarte \\
   KTH Royal Institute of Technology\\
-  \texttt{ldr0@kth.se} \\
+  \texttt{leandrod@kth.se} \\
   \And
   Miguel Arroyo Marquez \\
   KTH Royal Institute of Technology\\
-  \texttt{miguela@kth.se} \\
+  \texttt{miguelam@kth.se} \\
   \And
   Mingyang Chen \\
   KTH Royal Institute of Technology\\
-  \texttt{mingyanc@kth.se} \\
+  \texttt{minchen@kth.se} \\
 }
 
 \begin{document}
@@ -49,17 +47,40 @@
 \maketitle
 
 \begin{abstract}
-  This paper investigates 
+%   We investigates (topic) on the Reddit Politosphere Dataset during (time period). By applying label propagation, we generate XXX We use the Louvian method to measure modularity of the network and XXX. Temporal community track provides us a insight of XXX.
 \end{abstract}
+
+\section{\textbf{DELETE} Halfway point list}
+\begin{itemize}
+    \item Thorough introduction of your problem
+    \item Review of the relevant prior work
+    \item Description of the data collection/processing
+    \item Description of any initial findings or summary statistics from your dataset
+    \item Description of any mathematical background necessary for your problem
+    \item Formal description of any important algorithms used
+    \item Description of general difficulties with your problem which bear elaboration
+\end{itemize}
+
+
 
 \section{Introduction}
 % What is it that you are trying to solve/achieve and why does it matter
 
 \subsection{Motivation}
-Social media platforms have become 
+
+Social media platforms have become key areas for public deliberation, where everyday users, political elites, journalists, and automated actors continuously co-produce a running commentary on current events. Though, these discussions do not happen in a vacuum, there is a reciprocal relationship between online talk and real-life political discourse \cite{effectnewsitaly}. 
+
+Understanding this dual role is especially urgent for political information ecosystems. Online political talk feeds into offline outcomes—voting, protest, policy support—and vice-versa. At the same time, the affordances of different sites create distinct conversational ecologies.
+
+Reddit is an especially revealing case: it aggregates more than a decade of timestamped conversations in thousands of topical “subreddits,” yet it also allows users to roam freely across communities under a single pseudonymous identity.
+
+This combination of persistent identity and voluntary association means that we can watch political communities form, splinter, and re-assemble at a resolution that surveys or news coverage cannot approach.
+
+With this ground truth, we aim to use data mining techniques to assess the evolution of political communities through topological analysis across multiple election cycles. Our goal is to identify structural shifts in community formation, detect patterns of radicalization or the emergence of echo chambers and trace user migration. By doing so, we hope to uncover how large-scale political discourse adapts to offline shocks and contributes to broader trends in polarization and democratic engagement.
+
 
 \subsection{Problem Definition}
-In this paper, we aim to analyze the 
+We aim to understand how political communities on Reddit form, change, and dissolve over time (2008-2019). We want to see if big political events like elections cause these communities to change their structure. We will track how groups of political subreddits cluster together based on shared users, and measure if these clusters become more separate (polarized) over time. This analysis will help us understand how online political discussion spaces react to real-world events.
 \begin{itemize}
     \item How do political communities 
 \end{itemize}
@@ -69,6 +90,48 @@ We approach this problem through ´
 
 \section{Related Work}
 % How does your project relate to previous work
+
+\section{Description of any initial findings or summary statistics from your dataset}
+\subsection{Dataset used}
+We use the Reddit Politosphere dataset \cite{hofmann2022politosphere}, which covers more than 600 political subreddits over a 12-year period (2008-2019). The dataset contains:
+\begin{itemize}
+    \item Network data files
+    \item Comments per user, per subreddit, per month for each year
+    \item User metadata files
+\end{itemize}
+
+\subsubsection{Network files}
+The network files are 3, a weighted graph, an unweighted graph and a networks metadata file.
+
+For the weighted graph, the way the calculated it is using 
+
+
+
+
+
+A brief summary of the above would be first a weighted graph, where 
+
+
+
+\todo{Leandro and andrei}
+
+\section{Description of any mathematical background necessary for your problem}
+
+For the project we have attempted the following mathematical points. Though, not all have been found to be of use for the results and experimentation.
+\begin{itemize}
+    \item Giant Connected Component
+    \item Label Propagation
+    \item Clustering:
+    \begin{itemize}
+        \item Louvain Method
+        \item Spectral Clustering
+        \item K-means/KNN clustering
+    \end{itemize}
+    \item Louvain method and Spectral Clustering
+    \item PageRank hubs
+    \item Jaccard overlap
+    \item node2vec
+\end{itemize}
 
 \subsection{Political Polarization in Social Media}
 % Discuss previous works on political polarization in social media
@@ -122,24 +185,6 @@ We evaluate our analysis using several metrics:
     \item Community quality metrics 
 \end{itemize}
 
-\section{Results and Discussion}
-\subsection{Community Evolution Patterns}
-% Present and discuss results on community evolution
-
-\subsection{Correlation with Political Events}
-% Present and discuss results on correlation with political events
-
-\subsection{Polarization Trends}
-% Present and discuss results on polarization trends
-
-\subsection{Algorithm Comparison}
-% Compare the performance of different community detection algorithms
-
-\section{Conclusion}
-% Summarize main findings, contributions, and implications
-
-\subsection{Limitations and Future Work}
-% Discuss limitations of the study and potential future directions
 
 \bibliographystyle{plain}
 \bibliography{references}

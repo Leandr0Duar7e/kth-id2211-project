@@ -26,7 +26,7 @@ Louvain Communities:
 
 Spectral Communities:
   Community 2: {}
-  Community 1: {'dem': 13, 'rep': 10}
+  Community 1: {'rep': 10, 'dem': 13}
   Community 0: {}
 
 --- CONCLUSION ---

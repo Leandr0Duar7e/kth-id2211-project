@@ -5,7 +5,7 @@ Number of nodes (subreddits): 21
 Number of edges (connections): 28
 
 --- ALGORITHM PERFORMANCE ---
-Louvain Modularity: 0.017901187148730124
+Louvain Modularity: 0.022932729747840264
 Spectral Modularity: 0.0
 Louvain Purity: 1.0
 Spectral Purity: 1.0
@@ -18,9 +18,9 @@ Spectral Communities: 1 (k=1)
 
 --- COMMUNITY-PARTY BREAKDOWN ---
 Louvain Communities:
-  Community 2: {'dem': 1}
+  Community 0: {'dem': 1}
   Community 1: {}
-  Community 0: {}
+  Community 2: {}
 
 Spectral Communities:
   Community 0: {'dem': 1}

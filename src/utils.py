@@ -257,6 +257,163 @@ def calculate_nmi(
         return 0.0
 
 
+def load_yearly_graph_from_csv(
+    network_data_dir: Path,
+    year: int,
+    node_1_col: str = "node_1",
+    node_2_col: str = "node_2",
+    unweighted_col: str = "unweighted",
+) -> nx.Graph:
+    """
+    Loads the unweighted network for a given year from a CSV file.
+    Filters for edges where the unweighted_col == 1.
+    Node labels from node_1_col and node_2_col are read as strings.
+
+    Args:
+        network_data_dir (Path): The directory containing the network CSV files.
+        year (int): The year for which to load the graph.
+        node_1_col (str): Name of the column for the first node.
+        node_2_col (str): Name of the column for the second node.
+        unweighted_col (str): Name of the column indicating unweighted edge existence.
+
+    Returns:
+        nx.Graph: The loaded graph, or an empty graph if file not found or error occurs.
+    """
+    try:
+        graph_file_name = f"networks_{year}.csv"
+        graph_path = network_data_dir / graph_file_name
+
+        if not graph_path.exists():
+            print(
+                f"Warning: Graph file for year {year} not found at {graph_path}. Returning empty graph."
+            )
+            return nx.Graph()
+
+        edge_df = pd.read_csv(graph_path, dtype={node_1_col: str, node_2_col: str})
+
+        if unweighted_col not in edge_df.columns:
+            print(
+                f"Warning: '{unweighted_col}' column not found in {graph_path}. Attempting to use all edges."
+            )
+            # If unweighted_col is missing, we might assume all edges are part of the intended graph.
+            # This part of the logic depends on how you want to handle missing 'unweighted' column.
+            # For now, create graph with all edges if column is missing.
+            unweighted_edges_df = edge_df
+        else:
+            # Filter for edges that are part of the unweighted backbone
+            unweighted_edges_df = edge_df[edge_df[unweighted_col] == 1]
+
+        if unweighted_edges_df.empty:
+            # print(f"No unweighted edges found or file was empty for year {year} in {graph_path}.")
+            return nx.Graph()
+
+        graph_year = nx.from_pandas_edgelist(
+            unweighted_edges_df, node_1_col, node_2_col
+        )
+        return graph_year
+
+    except pd.errors.EmptyDataError:
+        print(
+            f"Warning: Graph file for year {year} ({graph_path}) is empty. Returning empty graph."
+        )
+        return nx.Graph()
+    except Exception as e:
+        print(
+            f"Error loading graph for year {year} from {graph_path}: {e}. Returning empty graph."
+        )
+        return nx.Graph()
+
+
+def load_metadata_dataframe_from_jsonl(
+    file_path: Path, fields_to_keep: list[str], default_values: dict = None
+) -> pd.DataFrame:
+    """
+    Loads metadata from a JSONL file into a Pandas DataFrame, keeping specified fields.
+
+    Args:
+        file_path (Path): Path to the JSONL metadata file.
+        fields_to_keep (list[str]): A list of field names to extract from the JSON objects.
+                                    'subreddit' field is mandatory and will always be included.
+        default_values (dict, optional): A dictionary mapping field names to default values
+                                         to use if a field is missing in a JSON object.
+                                         Defaults to None, meaning missing fields will be NaN/None initially.
+
+    Returns:
+        pd.DataFrame: A DataFrame containing the extracted metadata.
+    """
+    if not file_path.exists():
+        print(f"Error: Metadata file '{file_path}' not found.")
+        return pd.DataFrame()
+
+    if default_values is None:
+        default_values = {}
+
+    processed_fields_to_keep = ["subreddit"] + [
+        f for f in fields_to_keep if f != "subreddit"
+    ]
+
+    data_list = []
+    with open(file_path, "r") as f:
+        for line_number, line in enumerate(f, 1):
+            try:
+                record = json.loads(line.strip())
+            except json.JSONDecodeError:
+                print(
+                    f"Warning: Could not decode JSON from line {line_number} in {file_path}: {line.strip()}"
+                )
+                continue
+
+            if "subreddit" not in record or not record["subreddit"]:
+                print(
+                    f"Warning: 'subreddit' field missing or empty in line {line_number} in {file_path}. Skipping record."
+                )
+                continue
+
+            row_data = {"subreddit": str(record["subreddit"])}
+
+            for field in processed_fields_to_keep:
+                if field == "subreddit":
+                    continue
+                row_data[field] = record.get(field, default_values.get(field))
+
+            data_list.append(row_data)
+
+    if not data_list:
+        return pd.DataFrame(columns=processed_fields_to_keep)
+
+    df = pd.DataFrame(data_list)
+
+    if "party" in df.columns:
+        df["party"] = (
+            df["party"]
+            .astype(str)
+            .replace(["nan", "None"], default_values.get("party", ""))
+        )
+        if default_values.get("party") is None:
+            df["party"] = df["party"].replace("None", "")
+
+    if "banned" in df.columns:
+        df["banned"] = (
+            pd.to_numeric(df["banned"], errors="coerce")
+            .fillna(default_values.get("banned", 0))
+            .astype(int)
+        )
+
+    if "gun" in df.columns:
+        df["gun"] = (
+            pd.to_numeric(df["gun"], errors="coerce")
+            .fillna(default_values.get("gun", 0))
+            .astype(int)
+        )
+
+    for field in processed_fields_to_keep:
+        if field not in df.columns:
+            df[field] = default_values.get(field, None)
+
+    final_columns = [col for col in processed_fields_to_keep if col in df.columns]
+    return df[final_columns]
+
+
 if __name__ == "__main__":
     # Example Usage (assuming you have the data in the expected structure relative to project root)
     project_root = get_project_root()

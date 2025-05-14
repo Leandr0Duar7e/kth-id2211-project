@@ -309,9 +309,9 @@ class LabelPropagator:
 
         ensure_dir(output_file_path.parent)
         plt.savefig(output_file_path, dpi=300, bbox_inches="tight")
-    plt.close()
+        plt.close()
         print(f"Label propagation visualization saved to {output_file_path}")
-    
+
 
 if __name__ == "__main__":
     project_root = get_project_root()

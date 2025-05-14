@@ -24,7 +24,7 @@ Louvain Communities:
   Community 3: {'dem': 2}
 
 Spectral Communities:
-  Community 0: {'dem': 2, 'rep': 1}
+  Community 0: {'rep': 1, 'dem': 2}
 
 --- CONCLUSION ---
 Better modularity: Louvain

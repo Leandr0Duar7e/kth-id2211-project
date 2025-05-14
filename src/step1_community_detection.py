@@ -90,7 +90,7 @@ def process_year(
     ensure_dir(louvain_output_dir)
 
     G_weighted_louvain = load_network(network_file, weighted=True)
-    louvain_detector = LouvainCommunityDetector(random_state=42)
+    louvain_detector = LouvainCommunityDetector(random_state=42, num_runs=10)
     louvain_partition = None
     louvain_modularity = None
     louvain_communities = None
