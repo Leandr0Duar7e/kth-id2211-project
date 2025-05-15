@@ -133,6 +133,9 @@ def main():
         "gun": get_target_nodes(subreddit_metadata, "gun"),
     }
 
+    global_min_y = float("inf")
+    global_max_y = float("-inf")
+
     for i, year in enumerate(YEARS):
         print(f"Processing year: {year}")
         graph_year = load_yearly_graph_from_csv(Path(ABSOLUTE_NETWORK_DATA_DIR), year)
@@ -156,6 +159,9 @@ def main():
                     graph_year, main_sub_str, nodes_set
                 )
                 all_main_sub_data[main_sub_orig][group_type][i] = avg_dist
+                if pd.notna(avg_dist):
+                    global_min_y = min(global_min_y, avg_dist)
+                    global_max_y = max(global_max_y, avg_dist)
 
     # Plotting
     master_years_list = list(YEARS)
@@ -228,13 +234,11 @@ def main():
         plt.xticks(plot_years, rotation=45)  # Use plot_years for x-ticks
         plt.tight_layout()
 
-        all_values_for_plot = plot_dem_data + plot_rep_data + plot_gun_data
-        valid_values_for_plot = [v for v in all_values_for_plot if pd.notna(v)]
-        if valid_values_for_plot:
-            min_val = min(valid_values_for_plot)
-            max_val = max(valid_values_for_plot)
-            plt.ylim(max(0, min_val - 0.5), max_val + 0.5)
+        # Set consistent Y-axis limits for all plots
+        if global_min_y != float("inf") and global_max_y != float("-inf"):
+            plt.ylim(max(0, global_min_y - 0.5), global_max_y + 0.5)
         else:
+            # Default if no data was found across all plots (should be rare)
             plt.ylim(0, 10)
 
         plot_filename = os.path.join(
