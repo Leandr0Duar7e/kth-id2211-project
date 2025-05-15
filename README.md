@@ -8,7 +8,7 @@ Our analysis so far has focused on understanding the structure and dynamics of t
 
 1.  **Exploratory Data Analysis (EDA):** We began by exploring the yearly network data derived from user comment overlaps between subreddits. This helped us understand the overall network characteristics and identify consistently influential or central subreddits.
 2.  **Temporal Shortest Path Analysis:** For key subreddits identified during EDA, we calculated their average shortest path distances to clusters of Democrat-affiliated, Republican-affiliated, and Gun Control-focused subreddits over the 12-year period. This revealed how their proximity to these ideological/topical groups evolved, often showing distinct patterns around major political events.
-3.  **Network Visualization & Characterization:** We generated visualizations of the yearly subreddit interaction networks, color-coding nodes based on available metadata (e.g., political party affiliation, banned status, focus on gun control). These visualizations provided qualitative insights into community clustering, polarization, and the an/Users/ldr0/Documents/KTH/Data Mining/FinalProject/src/step0_analysis.pyual prominence of different groups.
+3.  **Network Visualization & Characterization:** We generated visualizations of the yearly subreddit interaction networks, color-coding nodes based on available metadata (e.g., political party affiliation, banned status, focus on gun control). These visualizations provided qualitative insights into community clustering, polarization, and the anual prominence of different groups.
 
 ## Key Scripts
 
