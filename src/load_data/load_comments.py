@@ -1,7 +1,61 @@
 import argparse
 import re
+import logging
+import pandas as pd
+from typing import Optional
 
 import pandas as pd
+import logging
+from typing import Optional, Set
+
+def load_comments(
+    comments_file: str,
+    subreddits: Optional[Set[str]] = None,
+    users: Optional[Set[str]] = None,
+    chunksize: int = 10_000
+) -> pd.DataFrame:
+    try:
+        reader = pd.read_json(
+            comments_file,
+            compression='bz2',
+            lines=True,
+            chunksize=chunksize,
+            dtype=False
+        )
+    except ValueError as e:
+        logging.error("Error reading JSON from %s: %s", comments_file, e)
+        raise
+    except FileNotFoundError:
+        msg = f"Comments file not found: {comments_file}"
+        logging.exception(msg)
+        raise
+
+    frames: list[pd.DataFrame] = []
+
+    for idx, chunk in enumerate(reader):
+        logging.debug("Processing chunk %d with %d rows", idx, len(chunk))
+
+        if subreddits is not None:
+            found_subs = chunk['subreddit'].dropna().unique()
+            subreddits.update(found_subs)
+            logging.debug("Updated subreddits set with %d entries from chunk %d", len(found_subs), idx)
+
+        if users is not None:
+            found_users = chunk['author'].dropna().unique()
+            users.update(found_users)
+            logging.debug("Updated users set with %d entries from chunk %d", len(found_users), idx)
+
+        frames.append(chunk)
+
+    if not frames:
+        logging.warning("No data loaded from %s", comments_file)
+        return pd.DataFrame()
+
+    result = pd.concat(frames, sort=False)
+    logging.info("Loaded total %d comments", len(result))
+    return result
+
+
 
 
 def main():
