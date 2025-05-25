@@ -13,6 +13,7 @@ def main():
     parser.add_argument('--comments_file', default=None, type=str, required=True, help='Comments file')
     parser.add_argument('--subreddits_file', default=None, type=str, required=False, help='Subreddits file')
     parser.add_argument('--target_dir', default=None, type=str, required=True, help='Directory to store comments')
+    parser.add_argument('--threshold', default=1, type=int, required=False, help='Threshold for edge weight')
     args = parser.parse_args()
 
     # Read subreddits
