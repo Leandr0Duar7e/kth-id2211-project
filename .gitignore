@@ -185,17 +185,14 @@ cython_debug/
 .pypirc
 
 # Processed data folders - keep folders, ignore contents except .gitkeep
-data/processed/label_propagation/*
-!data/processed/label_propagation/.gitkeep
-data/processed/louvain_clustering/*
-!data/processed/louvain_clustering/.gitkeep
-data/processed/network_metadata_visualizations/*
-!data/processed/network_metadata_visualizations/.gitkeep
+data/processed/visualizations/*
+!data/processed/visualizations/.gitkeep
 data/processed/shortest_paths/*
 !data/processed/shortest_paths/.gitkeep
 data/processed/spectral_clustering/*
 !data/processed/spectral_clustering/.gitkeep
 
+!graph_*.csv
+!leandro_graph_*.csv
 
-*.txt
-*.json
+
