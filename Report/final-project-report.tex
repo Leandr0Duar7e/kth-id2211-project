@@ -20,6 +20,10 @@
 \usepackage{subcaption}
 \usepackage{lineno}
 \usepackage{todonotes}
+\usepackage{amsthm}
+
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}
 
 
 \title{Temporal Evolution of Political Communities on Reddit: A Graph-Based Analysis}
@@ -405,6 +409,34 @@ Currently, we are applying community detection experiments, including label prop
 Looking ahead, our next steps will involve a more granular analysis. We plan to zero in on specific, highly impactful years like 2013 and 2016, selecting subreddit clusters, identified primarily via the Louvain method, that appear most responsive to the major events of those periods. With these targeted subreddit-year combinations, we will pivot to analyzing their textual content. By applying simple topic modeling techniques to the comment data from these specific subreddits during relevant months, we aim to confirm that their discussions indeed centered on the events we identified as critical. Following topical confirmation, a sentiment analysis model will be employed to gauge the collective reaction and emotional tone within these communities concerning those events. This focused approach will allow us to test concrete hypotheses, such as how mass shootings ignite polarized discussions on gun control, or how public opinion within these online enclaves shifts towards presidential candidates like Obama and Trump around their respective election periods. This focused analysis will deliver concrete insights into how Reddit communities evolve and their sentiment is shaped.
 
 
+\subsection{User-Sentiment Based Edge Weight Model}
+
+We define a novel approach to weight edges between subreddit nodes based on user sentiment consistency. For a given month $M$:
+
+\paragraph{User Activity Variables.} For a user $u$ commenting in subreddit $s$ during month $M$:
+\begin{itemize}
+  \item $N_{total,u,s,M}$ is the total number of comments.
+  \item $S_{pos,u,s,M}$ is the sum of scores from positive-scoring comments.
+  \item $N_{pos,u,s,M}$ is the count of positive-scoring comments.
+  \item $S_{neg\_abs,u,s,M}$ is the sum of absolute values of scores from negative-scoring comments.
+  \item $N_{neg,u,s,M}$ is the count of negative-scoring comments.
+\end{itemize}
+
+\paragraph{User Sentiment Value.} The sentiment value for user $u$ in subreddit $s$ during month $M$ is:
+\begin{equation}
+Val_{u,s,M} = \frac{1}{N_{total,u,s,M}} \left( S_{pos,u,s,M} \cdot N_{pos,u,s,M} - S_{neg\_abs,u,s,M} \cdot N_{neg,u,s,M} \right)
+\end{equation}
+
+\paragraph{User Sentiment Signal.} The binary sentiment signal is determined by:
+\begin{equation}
+Sig_{u,s,M} = \operatorname{sgn}(Val_{u,s,M})
+\end{equation}
+
+\paragraph{Edge Weight.} The weight of the edge between subreddits $s_i$ and $s_j$ for month $M$ is:
+\begin{equation}
+W_{s_i,s_j,M} = \sum_{u \in \text{Users}} \mathbb{I}\Big( (N_{total,u,s_i,M} > 0) \land (N_{total,u,s_j,M} > 0) \land (Sig_{u,s_i,M} \neq 0) \land (Sig_{u,s_i,M} = Sig_{u,s_j,M}) \Big)
+\end{equation}
+where $\mathbb{I}(\cdot)$ is the indicator function that equals 1 when the condition is true and 0 otherwise.
 
 
 \bibliographystyle{plain}

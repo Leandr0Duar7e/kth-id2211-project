@@ -197,7 +197,7 @@ class CommentProcessor:
         self.bot_user_ids = (
             load_bot_user_ids(users_metadata_file) if users_metadata_file else set()
         )
-        selftopic_modeler = GuidedTopicModeler(
+        self.topic_modeler = GuidedTopicModeler(
             seed_topic_list=seed_topic_list,
             min_topic_size=15,  # Higher minimum size
             nr_topics=25,  # cap on total topics (seed topics + some emergent ones)
@@ -264,17 +264,41 @@ class CommentProcessor:
 
         # 3. Sentiment Analysis
         print("\nStep 3: Performing sentiment analysis...")
-        # Use 'body_cleaned' for sentiment as it's the cleaned text available
-        texts_for_sentiment = comments_df["body_cleaned"].tolist()
-        sentiments = self.sentiment_analyzer.predict_sentiment_batch(
-            texts_for_sentiment
+        # Mark empty comments to skip sentiment analysis
+        comments_df["is_empty_comment"] = (
+            comments_df["body_cleaned"].astype(str).str.strip().eq("")
         )
-        comments_df["sentiment"] = sentiments
+
+        # Only perform sentiment analysis on non-empty comments
+        non_empty_mask = ~comments_df["is_empty_comment"]
+
+        # Initialize sentiment column with None
+        comments_df["sentiment"] = None
+
+        if non_empty_mask.any():
+            # Use 'body_cleaned' for sentiment as it's the cleaned text available
+            texts_for_sentiment = comments_df.loc[
+                non_empty_mask, "body_cleaned"
+            ].tolist()
+            sentiments = self.sentiment_analyzer.predict_sentiment_batch(
+                texts_for_sentiment
+            )
+
+            # Assign sentiments only to non-empty comments
+            comments_df.loc[non_empty_mask, "sentiment"] = sentiments
+
+        # For empty comments, set sentiment to null (None/NaN)
+        # This is already done by initializing with None
+
+        # Drop the temporary column
+        comments_df = comments_df.drop(columns=["is_empty_comment"])
 
         # 4. Finalize DataFrame and Save
         print("\nStep 4: Finalizing and saving results...")
-        # Columns to save: id, subreddit_id, topic_label (more readable), sentiment
-        final_df = comments_df[["id", "subreddit_id", "topic_label", "sentiment"]]
+        # Columns to save: id, subreddit_id, topic_label (more readable), sentiment, body_cleaned
+        final_df = comments_df[
+            ["id", "subreddit_id", "topic_label", "sentiment", "body_cleaned"]
+        ]
 
         ensure_dir(output_dir)
         if output_filename:

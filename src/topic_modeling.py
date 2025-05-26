@@ -87,19 +87,39 @@ class GuidedTopicModeler:
             comments_df["topic_label"] = "NO_TOPIC_EMPTY_INPUT"
             return comments_df, None
 
+        # Mark empty comments before processing
+        comments_df["is_empty_comment"] = (
+            comments_df[text_column].astype(str).str.strip().eq("")
+        )
+
+        # Create a copy of the dataframe with only non-empty comments for modeling
+        non_empty_df = comments_df[~comments_df["is_empty_comment"]].copy()
+
+        if non_empty_df.empty:
+            print("Warning: All comments are empty. Skipping topic modeling.")
+            comments_df["topic_id"] = -2  # Special ID for skipped/empty
+            comments_df["topic_label"] = "EMPTY_COMMENT"
+            return comments_df, None
+
         # BERTopic expects a list of documents
-        documents = comments_df[text_column].astype(str).fillna("").tolist()
+        documents = non_empty_df[text_column].astype(str).fillna("").tolist()
 
         try:
             topics, _ = self.model.fit_transform(documents)
-            comments_df["topic_id"] = topics
+
+            # Initialize topic columns for the full dataframe with empty values
+            comments_df["topic_id"] = None
+            comments_df["topic_label"] = None
+
+            # Assign topics only to non-empty comments
+            non_empty_df["topic_id"] = topics
 
             # Create a mapping from topic ID to a more descriptive label from seed list if possible
             # BERTopic might generate topics not perfectly aligned with seeds, or merge them.
             # The custom_labels_ attribute can be set if topics directly map to seeds.
             # For guided, the topic IDs *should* align with the order of seed_topic_list if distinct topics are formed for each.
             # Topic -1 is for outliers.
-            self.topic_mapping = {-1: "OUTLIERS"}
+            self.topic_mapping = {-1: "OUTLIERS", -2: "EMPTY_COMMENT"}
             generated_topic_info = self.model.get_topic_info()
 
             # Try to map generated topics back to the initial seed lists for clearer labels
@@ -123,9 +143,27 @@ class GuidedTopicModeler:
                         generated_topic_info["Topic"] == topic_id
                     ]["Name"].iloc[0]
 
-            comments_df["topic_label"] = (
-                comments_df["topic_id"].map(self.topic_mapping).fillna("UNKNOWN_TOPIC")
+            # Apply topic labels to non-empty comments
+            non_empty_df["topic_label"] = (
+                non_empty_df["topic_id"].map(self.topic_mapping).fillna("UNKNOWN_TOPIC")
             )
+
+            # Update the original dataframe with topic information for non-empty comments
+            comments_df.loc[~comments_df["is_empty_comment"], "topic_id"] = (
+                non_empty_df["topic_id"].values
+            )
+            comments_df.loc[~comments_df["is_empty_comment"], "topic_label"] = (
+                non_empty_df["topic_label"].values
+            )
+
+            # Assign empty comment topic to empty comments
+            comments_df.loc[comments_df["is_empty_comment"], "topic_id"] = -2
+            comments_df.loc[comments_df["is_empty_comment"], "topic_label"] = (
+                "EMPTY_COMMENT"
+            )
+
+            # Drop the temporary column
+            comments_df = comments_df.drop(columns=["is_empty_comment"])
 
             print("Topic modeling complete.")
             print(f"Topic counts:\n{comments_df['topic_label'].value_counts()}")
@@ -135,6 +173,10 @@ class GuidedTopicModeler:
             comments_df["topic_id"] = -3  # Special ID for error
             comments_df["topic_label"] = "NO_TOPIC_MODELING_ERROR"
             self.topic_mapping = None
+
+            # Drop the temporary column if it exists
+            if "is_empty_comment" in comments_df.columns:
+                comments_df = comments_df.drop(columns=["is_empty_comment"])
 
         return comments_df, self.topic_mapping
 
