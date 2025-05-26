@@ -2,10 +2,8 @@ import pandas as pd
 import networkx as nx
 import json
 from pathlib import Path
-import os
-import numpy as np
 from sklearn.metrics import normalized_mutual_info_score
-from collections import Counter, defaultdict
+from collections import defaultdict
 
 # Try to import community_louvain for a consistent modularity calculation
 try:
