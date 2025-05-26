@@ -2,6 +2,7 @@ import networkx as nx
 import pandas as pd
 import glob
 import random
+import os
 import numpy as np
 from sklearn.metrics import (
     roc_auc_score,
@@ -11,20 +12,34 @@ from sklearn.metrics import (
 )
 from sklearn.linear_model import LogisticRegression
 
-def load_monthly_graphs(path_pattern="data/*.csv"):
+
+def load_monthly_graphs():
     """
-    Load CSVs of format 'YYYY-MM.csv' with columns subreddit_A,subreddit_B,weight
+    Load CSVs matching 'leandro_graph_YYYY-MM.csv' in the known graphs directory.
     Returns list of (month, Graph) sorted chronologically.
     """
+    # Get absolute path to the directory of the current script
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+
+    # Construct the absolute path to the graphs folder
+    graphs_dir = os.path.join(base_dir, "..", "..", "data", "processed", "graphs")
+
+    # Construct the full pattern to match leandro_graph_*.csv only
+    path_pattern = os.path.join(graphs_dir, "graph_*.csv")
+
     graphs = []
     for fn in sorted(glob.glob(path_pattern)):
-        month = fn.split("/")[-1].replace(".csv","")
+        # Extract the date from the filename (after "leandro_graph_")
+        filename = os.path.basename(fn)
+        month = filename.replace("graph_", "").replace(".csv", "")
+
         df = pd.read_csv(fn)
         G = nx.Graph()
         for u, v, w in df.values:
             G.add_edge(u, v, weight=int(w))
         graphs.append((month, G))
     return graphs
+
 
 def expanding_window_splits(monthly_graphs):
     """
@@ -38,6 +53,7 @@ def expanding_window_splits(monthly_graphs):
             G_train = nx.compose(G_train, G_past)
         month, G_test = monthly_graphs[idx]
         yield G_train, G_test, month
+
 
 # Negative sampling strategies
 def sample_uniform_negatives(G, n):
@@ -76,17 +92,42 @@ def sample_hard_negatives(G, n):
 
 # Feature extraction
 def extract_features(G, edge_list):
-    neighbors = {n: set(G[n]) for n in G}
-    deg = dict(G.degree())
+    """
+    For each (u, v) in edge_list, compute:
+      - cn : common neighbors count
+      - jc : Jaccard coef
+      - aa : Adamic–Adar
+      - pa : preferential attachment
+    If u or v didn’t appear in G, treat them as isolated (deg=0, no neighbors).
+    Returns an array of shape (len(edge_list), 4).
+    """
+    # build maps only over existing nodes
+    neighbors = {n: set(G[n]) for n in G.nodes()}
+    deg       = dict(G.degree())
+
     feats = []
     for u, v in edge_list:
-        cn = len(neighbors[u] & neighbors[v])
-        union = len(neighbors[u] | neighbors[v])
+        # if either endpoint is missing, we'll just get empty sets / zero degrees
+        nu = neighbors.get(u, set())
+        nv = neighbors.get(v, set())
+
+        cn = len(nu & nv)
+        union = len(nu | nv)
         jc = cn / union if union else 0.0
-        aa = sum(1.0 / np.log(deg[w]) for w in (neighbors[u] & neighbors[v]) if deg[w] > 1)
-        pa = deg[u] * deg[v]
+
+        # only sum over w with deg[w] > 1
+        aa = sum(
+            1.0 / np.log(deg[w])
+            for w in (nu & nv)
+            if deg.get(w, 0) > 1
+        )
+
+        pa = deg.get(u, 0) * deg.get(v, 0)
+
         feats.append([cn, jc, aa, pa])
+
     return np.array(feats)
+
 
 # Metrics
 def precision_at_k(y_true, y_scores, k):
@@ -114,7 +155,7 @@ def evaluate_preds(y_true, y_scores, ks=[50,100]):
 # Main pipeline
 if __name__ == "__main__":
     random.seed(42)
-    monthly_graphs_raw = load_monthly_graphs(path_pattern="data/*.csv")
+    monthly_graphs_raw = load_monthly_graphs()
     thresholds = [5, 10, 20]  # for edge-weight threshold sweep
     samplers = {
         'uniform': sample_uniform_negatives,
