@@ -195,3 +195,7 @@ data/processed/shortest_paths/*
 !data/processed/shortest_paths/.gitkeep
 data/processed/spectral_clustering/*
 !data/processed/spectral_clustering/.gitkeep
+
+
+*.txt
+*.json
