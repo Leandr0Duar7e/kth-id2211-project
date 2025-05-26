@@ -1,75 +1,94 @@
 import networkx as nx
-import numpy as np
 import random
+import numpy as np
 from sklearn.metrics import roc_auc_score
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
 
 
-def evaluate_link_prediction(
-        G: nx.Graph,
-        weight_attr: str,
-        test_frac: float = 0.2,
-        n_splits: int = 5,
-        random_seed: int = 42
-) -> (float, float):
-    """
-    Evaluate link prediction performance (AUC) for a given edge-weight attribute.
-
-    Parameters:
-    - G: A NetworkX graph where edges have the attribute `weight_attr`.
-    - weight_attr: Edge attribute name to use as the score.
-    - test_frac: Fraction of edges to hold out as positive test examples per split.
-    - n_splits: Number of random train/test splits.
-    - random_seed: Seed for reproducibility.
-
-    Returns:
-    - mean_auc: Mean AUC over splits.
-    - std_auc: Standard deviation of AUC over splits.
-    """
-    random.seed(random_seed)
-    nodes = list(G.nodes())
+def train_test_split_graph(G, test_frac=0.2, seed=42):
+    random.seed(seed)
     edges = list(G.edges())
     n_test = int(len(edges) * test_frac)
+    test_pos = set(random.sample(edges, n_test))
 
-    aucs = []
-    for _ in range(n_splits):
-        # Split positive edges
-        test_pos = random.sample(edges, n_test)
+    # build train graph
+    G_train = G.copy()
+    G_train.remove_edges_from(test_pos)
 
-        # Build training graph
-        G_train = G.copy()
-        G_train.remove_edges_from(test_pos)
+    # sample negative examples
+    nodes = list(G.nodes())
+    test_neg = set()
+    while len(test_neg) < n_test:
+        u, v = random.sample(nodes, 2)
+        if not G_train.has_edge(u, v):
+            test_neg.add((u, v))
+    return G_train, list(test_pos), list(test_neg)
 
-        # Sample negative edges
-        test_neg = set()
-        while len(test_neg) < n_test:
-            u, v = random.sample(nodes, 2)
-            if not G_train.has_edge(u, v):
-                test_neg.add((u, v))
-        test_neg = list(test_neg)
 
-        # Prepare true labels and scores
-        y_true = [1] * n_test + [0] * n_test
-        y_scores = []
+def extract_features(G, edge_list):
+    """
+    For each (u,v) in edge_list, compute link-prediction heuristics.
+    Returns: feature matrix of shape (len(edge_list), n_features)
+    """
+    # precompute neighbor sets and degrees
+    neighbors = {n: set(G[n]) for n in G}
+    deg = dict(G.degree())
 
-        # Positive scores
-        for u, v in test_pos:
-            y_scores.append(G[u][v].get(weight_attr, 0))
-        # Negative scores (0 if no edge)
-        for u, v in test_neg:
-            y_scores.append(G[u][v].get(weight_attr, 0) if G.has_edge(u, v) else 0)
+    features = []
+    for u, v in edge_list:
+        cn = len(neighbors[u] & neighbors[v])
+        # Jaccard
+        union_size = len(neighbors[u] | neighbors[v])
+        jc = cn / union_size if union_size else 0.0
+        # Adamic-Adar
+        aa = sum(1.0 / np.log(deg[w]) for w in (neighbors[u] & neighbors[v]) if deg[w] > 1)
+        # Preferential Attachment
+        pa = deg[u] * deg[v]
+        features.append([cn, jc, aa, pa])
+    return np.array(features)
 
-        # Compute AUC
-        auc = roc_auc_score(y_true, y_scores)
-        aucs.append(auc)
 
-    return np.mean(aucs), np.std(aucs)
+def evaluate_link_prediction(G, test_frac=0.2, seed=42):
+    # split
+    G_train, pos_train, neg_train = train_test_split_graph(G, test_frac, seed)
+    # for demonstration we'll use same split for test—but you could do k-fold
+    pos_test, neg_test = pos_train, neg_train
 
-# Example usage:
-# Assume `G` is your NetworkX graph with edges having attributes 'upvote_similarity'
-# and 'co_comment_count'.
-# G = nx.read_gpickle('subreddit_graph.gpickle')
-# mean_new, std_new = evaluate_link_prediction(G, 'upvote_similarity')
-# mean_old, std_old = evaluate_link_prediction(G, 'co_comment_count')
-# print(f"New method AUC: {mean_new:.4f} ± {std_new:.4f}")
-# print(f"Baseline  AUC: {mean_old:.4f} ± {std_old:.4f}")
+    # unsupervised scores on test set
+    feats_pos = extract_features(G_train, pos_test)
+    feats_neg = extract_features(G_train, neg_test)
+    y_true = np.array([1] * len(pos_test) + [0] * len(neg_test))
 
+    # take e.g. Common Neighbors alone
+    scores_cn = np.concatenate([feats_pos[:, 0], feats_neg[:, 0]])
+    auc_cn = roc_auc_score(y_true, scores_cn)
+    print(f"Unsupervised Common Neighbors AUC: {auc_cn:.4f}")
+
+    # --- supervised classifier ---
+    # build train data
+    X_train = np.vstack([extract_features(G_train, pos_train),
+                         extract_features(G_train, neg_train)])
+    y_train = np.array([1] * len(pos_train) + [0] * len(neg_train))
+
+    # choose a model:
+    model = LogisticRegression(max_iter=1000)
+    # model = RandomForestClassifier(n_estimators=100)
+    model.fit(X_train, y_train)
+
+    # predict on test set
+    X_test = np.vstack([feats_pos, feats_neg])
+    y_scores = model.predict_proba(X_test)[:, 1]
+    auc_sup = roc_auc_score(y_true, y_scores)
+    print(f"Supervised (LogReg) AUC:      {auc_sup:.4f}")
+
+    return {'cn_auc': auc_cn, 'sup_auc': auc_sup}
+
+
+if __name__ == "__main__":
+    # load your graph—replace with your own loading code
+    # e.g. G = nx.read_gpickle('subreddit_graph.gpickle')
+    G = nx.karate_club_graph()  # placeholder
+
+    results = evaluate_link_prediction(G)
+    print("Done.", results)
