@@ -28,6 +28,7 @@ def process_comments_file(comments_file, bot_users):
         counts = chunk.groupby(['author', 'subreddit']).size().reset_index(name='count')
         author_subreddit_counts = pd.concat([author_subreddit_counts, counts])
     
+    author_subreddit_counts = author_subreddit_counts.groupby(['author', 'subreddit']).sum().reset_index()
     return author_subreddit_counts
 
 
@@ -112,7 +113,7 @@ def main():
         
         # Process the file
         author_subreddit_counts = process_comments_file(comments_file, bot_users)
-        
+        author_subreddit_counts.to_csv(f'./penis.csv', index=False)
         # Create and save graph for this file
         create_graph(author_subreddit_counts, args.threshold, args.target_dir, date_match)
 
