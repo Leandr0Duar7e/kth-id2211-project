@@ -5,7 +5,7 @@ from pathlib import Path
 import os
 import numpy as np
 from sklearn.metrics import normalized_mutual_info_score
-from collections import Counter
+from collections import Counter, defaultdict
 
 # Try to import community_louvain for a consistent modularity calculation
 try:
@@ -412,6 +412,56 @@ def load_metadata_dataframe_from_jsonl(
 
     final_columns = [col for col in processed_fields_to_keep if col in df.columns]
     return df[final_columns]
+
+
+def load_bot_user_ids(users_metadata_file: Path) -> set[str]:
+    """
+    Loads bot user IDs from a JSONL metadata file.
+    Each line in the file is expected to be a JSON object.
+    It looks for an 'author' (or 'Author') key for the user ID and a 'bot' key with value 1.
+
+    Args:
+        users_metadata_file (Path): Path to the users_metadata.jsonl file.
+
+    Returns:
+        set[str]: A set of author IDs identified as bots.
+    """
+    bot_ids = set()
+    if not users_metadata_file.exists():
+        print(
+            f"Warning: Users metadata file not found at {users_metadata_file}. No bots will be filtered."
+        )
+        return bot_ids
+
+    try:
+        with open(users_metadata_file, "r", encoding="utf-8") as f:
+            for line_num, line in enumerate(f, 1):
+                try:
+                    data = json.loads(line.strip())
+                    is_bot = data.get("bot") == 1
+                    author_id = None
+                    if "author" in data:  # Preferred key based on comments data
+                        author_id = data["author"]
+
+                    if is_bot and author_id:
+                        bot_ids.add(str(author_id))  # Ensure ID is string
+                except json.JSONDecodeError:
+                    print(
+                        f"Warning: JSON decode error on line {line_num} in {users_metadata_file}: {line.strip()}"
+                    )
+                    continue
+    except Exception as e:
+        print(
+            f"Error reading or processing users metadata file {users_metadata_file}: {e}"
+        )
+
+    if bot_ids:
+        print(f"Loaded {len(bot_ids)} bot user IDs from {users_metadata_file.name}.")
+    else:
+        print(
+            f"No bot user IDs loaded from {users_metadata_file.name}. This could be due to file format, content, or the file being empty."
+        )
+    return bot_ids
 
 
 if __name__ == "__main__":
