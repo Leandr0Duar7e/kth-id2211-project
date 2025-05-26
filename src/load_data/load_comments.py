@@ -3,17 +3,26 @@ import re
 import logging
 import pandas as pd
 from typing import Optional
-
+from pathlib import Path
 import pandas as pd
 import logging
 from typing import Optional, Set
 
-def load_comments(
-    comments_file: str,
-    subreddits: Optional[Set[str]] = None,
-    users: Optional[Set[str]] = None,
-    chunksize: int = 10_000
+
+
+def process_comments_file(
+    comments_file: Path,
+    aggregate_chunk,
+    merge_summaries,
+    chunksize: int = 10_000,
+
+
 ) -> pd.DataFrame:
+    """
+    Load comments from a bz2-encoded JSON-lines file in chunks,
+    aggregate sentiment statistics, and classify sentiment.
+    Returns a DataFrame summary for this file.
+    """
     try:
         reader = pd.read_json(
             comments_file,
@@ -30,32 +39,17 @@ def load_comments(
         logging.exception(msg)
         raise
 
-    frames: list[pd.DataFrame] = []
-
+    cumulative: Optional[pd.DataFrame] = None
     for idx, chunk in enumerate(reader):
-        logging.debug("Processing chunk %d with %d rows", idx, len(chunk))
+        logging.debug("Chunk %d: %d rows", idx, len(chunk))
+        chunk_summary = aggregate_chunk(chunk)
+        cumulative = merge_summaries(cumulative, chunk_summary)
 
-        if subreddits is not None:
-            found_subs = chunk['subreddit'].dropna().unique()
-            subreddits.update(found_subs)
-            logging.debug("Updated subreddits set with %d entries from chunk %d", len(found_subs), idx)
-
-        if users is not None:
-            found_users = chunk['author'].dropna().unique()
-            users.update(found_users)
-            logging.debug("Updated users set with %d entries from chunk %d", len(found_users), idx)
-
-        frames.append(chunk)
-
-    if not frames:
+    if cumulative is None or cumulative.empty:
         logging.warning("No data loaded from %s", comments_file)
         return pd.DataFrame()
 
-    result = pd.concat(frames, sort=False)
-    logging.info("Loaded total %d comments", len(result))
-    return result
-
-
+    return cumulative
 
 
 def main():
