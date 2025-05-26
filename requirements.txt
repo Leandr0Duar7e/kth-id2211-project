@@ -23,3 +23,6 @@ threadpoolctl==3.6.0
 tzdata==2025.2
 python-louvain==0.16
 mpld3==0.5.10
+bertopic
+transformers
+torch
