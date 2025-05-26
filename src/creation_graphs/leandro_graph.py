@@ -172,37 +172,42 @@ if __name__ == "__main__":
     project_root = Path(__file__).resolve().parents[2]
     metadata_path = project_root / 'data' / 'metadata' / 'users_metadata.json'
 
-    # Load only bot users
-    try:
-        df = pd.read_json(metadata_path, lines=True)
-        BOT_USERS = set(df.loc[df['bot'] == 1, 'author'].dropna())
-    except (FileNotFoundError, ValueError) as e:
-        print(f"Error loading metadata: {e}")
-        BOT_USERS = set()
+    BOT_USERS = set()
 
-    input_folder = Path("/home/two_play/datamining_data/2016")
-    output_folder = input_folder / 'graphs'
-    output_folder.mkdir(parents=True, exist_ok=True)
-    graphs: dict[str, nx.Graph] = {}
+    with open(os.path.join('data', 'metadata', 'users_metadata.json'), 'r') as f:
+        lines = f.readlines()
+        for line in lines:
+            user_metadata = json.loads(line)
+            if user_metadata['bot'] == 1:
+                BOT_USERS.add(user_metadata['author'])
 
+    # input_folder = Path("C:\Users\andre\Desktop\folders\kth-id2211-project\data\comments")
+    # output_folder = input_folder / 'graphs'
+    # output_folder.mkdir(parents=True, exist_ok=True)
+    # graphs: dict[str, nx.Graph] = {}
 
-    for file_path in sorted(input_folder.glob("*.bz2")):
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Build subreddit interaction network.")
+    parser.add_argument("--input", type=Path, help="path to comments.bz2 jsonlines")
+    parser.add_argument("--output", type=Path, help="path to output directory")
+    parser.add_argument("--chunksize", type=int, default=10000)
+    args = parser.parse_args()
+    
+    output_folder = Path(args.output)
+    os.makedirs(output_folder, exist_ok=True)
+    print(f"output_folder: {output_folder}")
+
+    for file_path in sorted(args.input.glob("*.bz2")):
+        print(file_path)
         month_name = file_path.stem
         base = month_name.rsplit('_', 1)[1]#
-        out_csv = output_folder / f"graph_{base}.csv"
-        out_summary_csv = output_folder / f"summary_{base}.csv"
+        print(f"base: {base}")
+        out_csv = output_folder / f"leandro_graph_{base}.csv"
+        out_summary_csv = output_folder / f"leandro_summary_{base}.csv"
 
         print(f"Processing: {file_path.name} → {out_csv.name}")
         try:
             main(comments_file=file_path, out_edge_csv=out_csv, summary_out=out_summary_csv)
         except Exception as e:
             print(f"Error processing {file_path.name}: {e}")
-    # import argparse
-    #
-    # parser = argparse.ArgumentParser(description="Build subreddit interaction network.")
-    # parser.add_argument("comments_file", type=Path, help="path to comments.bz2 jsonlines")
-    # parser.add_argument("--out", type=Path, default="subreddit_edges.csv", help="output CSV path")
-    # parser.add_argument("--chunksize", type=int, default=10000)
-    # args = parser.parse_args()
-    #
-    # main(args.comments_file, args.out, args.chunksize)
