@@ -63,7 +63,7 @@ def create_graph(author_subreddit_counts, threshold, target_dir, date):
     print("Writing results to file...")
 
     # Store graph
-    target_file = '{}/graph_{}_t{}.txt'.format(
+    target_file = '{}/graph_{}_t{}.csv'.format(
         target_dir, date, threshold
     )
 
@@ -103,7 +103,7 @@ def main():
                 bot_users.add(user_metadata['author'])
 
     print("Processing comment files...")
-    
+
     # Process each comment file separately
     for comments_file in args.comments_files:
         print(f"\nProcessing file: {os.path.basename(comments_file)}")
