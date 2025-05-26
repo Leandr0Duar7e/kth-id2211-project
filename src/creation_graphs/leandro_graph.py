@@ -75,20 +75,25 @@ def process_comments_file(
 
 def classify_sentiment(summary: pd.DataFrame) -> pd.DataFrame:
     """
-    Add a 'sentiment' column: 'Positive', 'Negative', or 'Neutral'.
-    Uses weighted Leandro score: (sum_pos_scores * num_pos - sum_neg_scores * num_neg) / (num_pos + num_neg).
+    Add a 'sentiment' column with values 'Positive', 'Negative', or 'Neutral',
+    based on the weighted Leandro score:
+      (sum_pos_scores * num_pos - sum_neg_scores * num_neg) / (num_pos + num_neg)
     """
     df = summary.copy()
-    # avoid division by zero
+
+    # compute denominator, avoid div-by-zero
     tot = df['num_pos'] + df['num_neg']
-    raw = (df['sum_pos_scores'] * df['num_pos'] - df['sum_neg_scores'] * df['num_neg']) / tot.replace(0, np.nan)
-    df['sentiment'] = pd.cut(
-        raw.fillna(0),
-        bins=[-np.inf, 0, np.inf],
-        labels=['Negative', 'Positive'],
-        include_lowest=True
-    ).astype('category')
-    df['sentiment'] = df['sentiment'].cat.add_categories('Neutral').fillna('Neutral')
+    raw = (df['sum_pos_scores'] * df['num_pos'] -
+           df['sum_neg_scores'] * df['num_neg']) / tot.replace(0, np.nan)
+
+    # classify
+    sentiment = np.where(raw >  0, 'Positive',
+                 np.where(raw <  0, 'Negative',
+                          'Neutral'))
+
+    df['sentiment'] = pd.Categorical(sentiment,
+                                     categories=['Negative','Neutral','Positive'],
+                                     ordered=True)
     return df
 
 
@@ -101,6 +106,9 @@ def build_subreddit_interactions(
     """
     # Keep only relevant columns and drop duplicates to avoid overcounting
     summary = summary[['author', 'subreddit', 'sentiment']].drop_duplicates()
+
+    # Do not look at neutral
+    summary = summary[summary['sentiment'] != 'Neutral']
 
     # Merge on author and sentiment to ensure both entries have the same sentiment
     merged = summary.merge(summary, on=['author', 'sentiment'])
@@ -147,11 +155,11 @@ def main(
     summary = process_comments_file(comments_file, chunksize)
     if summary.empty:
         return None
+    classified = classify_sentiment(summary)
     try:
-        summary.to_csv(summary_out, index=False)
+        classified.to_csv(summary_out, index=False)
     except:
         print("Error while writing summary")
-    classified = classify_sentiment(summary)
     edges = build_subreddit_interactions(classified)
     save_edges(edges, out_edge_csv)
     return edges
