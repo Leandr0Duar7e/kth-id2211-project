@@ -68,7 +68,7 @@ def create_graph(author_subreddit_counts, threshold, target_dir, date):
     )
 
     with open(target_file, 'w') as f:
-        f.write('node_1,node_2,weight\n')
+        f.write('subreddit_a,subreddit_b,weight\n')
         for i in tqdm(range(num_subreddits), desc="Writing edges"):
             for j in range(i + 1, num_subreddits):
                 if adjacency_mat[i][j] > 0:
@@ -119,3 +119,13 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+
+# python src/creation_graphs/create_graph.py --target_dir data/processed/graphs --threshold 1 --comments_file \
+# data/comments/comments_2016-08.bz2 \
+# data/comments/comments_2016-09.bz2 \
+# data/comments/comments_2016-10.bz2 \
+# data/comments/comments_2016-11.bz2 \
+# data/comments/comments_2016-12.bz2 \
+# data/comments/comments_2017-01.bz2 \
+# data/comments/comments_2017-02.bz2 \
