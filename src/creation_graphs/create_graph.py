@@ -113,7 +113,6 @@ def main():
         
         # Process the file
         author_subreddit_counts = process_comments_file(comments_file, bot_users)
-        author_subreddit_counts.to_csv(f'./penis.csv', index=False)
         # Create and save graph for this file
         create_graph(author_subreddit_counts, args.threshold, args.target_dir, date_match)
 
