@@ -1,94 +1,177 @@
 import networkx as nx
+import pandas as pd
+import glob
 import random
 import numpy as np
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import (
+    roc_auc_score,
+    average_precision_score,
+    precision_score,
+    recall_score
+)
 from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import RandomForestClassifier
 
+def load_monthly_graphs(path_pattern="data/*.csv"):
+    """
+    Load CSVs of format 'YYYY-MM.csv' with columns subreddit_A,subreddit_B,weight
+    Returns list of (month, Graph) sorted chronologically.
+    """
+    graphs = []
+    for fn in sorted(glob.glob(path_pattern)):
+        month = fn.split("/")[-1].replace(".csv","")
+        df = pd.read_csv(fn)
+        G = nx.Graph()
+        for u, v, w in df.values:
+            G.add_edge(u, v, weight=int(w))
+        graphs.append((month, G))
+    return graphs
 
-def train_test_split_graph(G, test_frac=0.2, seed=42):
-    random.seed(seed)
-    edges = list(G.edges())
-    n_test = int(len(edges) * test_frac)
-    test_pos = set(random.sample(edges, n_test))
+def expanding_window_splits(monthly_graphs):
+    """
+    For each month t > first, trains on all months < t and tests on t.
+    Yields (G_train, G_test, month_label).
+    """
+    for idx in range(1, len(monthly_graphs)):
+        # accumulate past graphs
+        G_train = nx.Graph()
+        for _, G_past in monthly_graphs[:idx]:
+            G_train = nx.compose(G_train, G_past)
+        month, G_test = monthly_graphs[idx]
+        yield G_train, G_test, month
 
-    # build train graph
-    G_train = G.copy()
-    G_train.remove_edges_from(test_pos)
-
-    # sample negative examples
+# Negative sampling strategies
+def sample_uniform_negatives(G, n):
     nodes = list(G.nodes())
-    test_neg = set()
-    while len(test_neg) < n_test:
+    neg = set()
+    while len(neg) < n:
         u, v = random.sample(nodes, 2)
-        if not G_train.has_edge(u, v):
-            test_neg.add((u, v))
-    return G_train, list(test_pos), list(test_neg)
+        if not G.has_edge(u, v):
+            neg.add((u, v))
+    return list(neg)
 
+def sample_distance2_negatives(G, n):
+    neg = set()
+    for u in G.nodes():
+        for w in G.neighbors(u):
+            for v in G.neighbors(w):
+                if u < v and not G.has_edge(u, v):
+                    neg.add((u, v))
+    neg = list(neg)
+    return random.sample(neg, min(n, len(neg)))
 
+def precompute_hard_pool(G):
+    neighbors = {n: set(G[n]) for n in G}
+    pool = []
+    for u in G.nodes():
+        for v in G.nodes():
+            if u < v and not G.has_edge(u, v):
+                cn = len(neighbors[u] & neighbors[v])
+                pool.append(((u, v), cn))
+    pool.sort(key=lambda x: x[1], reverse=True)
+    return [uv for uv, score in pool]
+
+def sample_hard_negatives(G, n):
+    pool = precompute_hard_pool(G)
+    return pool[:n]
+
+# Feature extraction
 def extract_features(G, edge_list):
-    """
-    For each (u,v) in edge_list, compute link-prediction heuristics.
-    Returns: feature matrix of shape (len(edge_list), n_features)
-    """
-    # precompute neighbor sets and degrees
     neighbors = {n: set(G[n]) for n in G}
     deg = dict(G.degree())
-
-    features = []
+    feats = []
     for u, v in edge_list:
         cn = len(neighbors[u] & neighbors[v])
-        # Jaccard
-        union_size = len(neighbors[u] | neighbors[v])
-        jc = cn / union_size if union_size else 0.0
-        # Adamic-Adar
+        union = len(neighbors[u] | neighbors[v])
+        jc = cn / union if union else 0.0
         aa = sum(1.0 / np.log(deg[w]) for w in (neighbors[u] & neighbors[v]) if deg[w] > 1)
-        # Preferential Attachment
         pa = deg[u] * deg[v]
-        features.append([cn, jc, aa, pa])
-    return np.array(features)
+        feats.append([cn, jc, aa, pa])
+    return np.array(feats)
 
+# Metrics
+def precision_at_k(y_true, y_scores, k):
+    idx = np.argsort(y_scores)[-k:]
+    preds = np.zeros_like(y_true)
+    preds[idx] = 1
+    return precision_score(y_true, preds)
 
-def evaluate_link_prediction(G, test_frac=0.2, seed=42):
-    # split
-    G_train, pos_train, neg_train = train_test_split_graph(G, test_frac, seed)
-    # for demonstration we'll use same split for test—but you could do k-fold
-    pos_test, neg_test = pos_train, neg_train
+def recall_at_k(y_true, y_scores, k):
+    idx = np.argsort(y_scores)[-k:]
+    preds = np.zeros_like(y_true)
+    preds[idx] = 1
+    return recall_score(y_true, preds)
 
-    # unsupervised scores on test set
-    feats_pos = extract_features(G_train, pos_test)
-    feats_neg = extract_features(G_train, neg_test)
-    y_true = np.array([1] * len(pos_test) + [0] * len(neg_test))
+def evaluate_preds(y_true, y_scores, ks=[50,100]):
+    res = {
+        'AUC': roc_auc_score(y_true, y_scores),
+        'AP': average_precision_score(y_true, y_scores)
+    }
+    for k in ks:
+        res[f'P@{k}'] = precision_at_k(y_true, y_scores, k)
+        res[f'R@{k}'] = recall_at_k(y_true, y_scores, k)
+    return res
 
-    # take e.g. Common Neighbors alone
-    scores_cn = np.concatenate([feats_pos[:, 0], feats_neg[:, 0]])
-    auc_cn = roc_auc_score(y_true, scores_cn)
-    print(f"Unsupervised Common Neighbors AUC: {auc_cn:.4f}")
-
-    # --- supervised classifier ---
-    # build train data
-    X_train = np.vstack([extract_features(G_train, pos_train),
-                         extract_features(G_train, neg_train)])
-    y_train = np.array([1] * len(pos_train) + [0] * len(neg_train))
-
-    # choose a model:
-    model = LogisticRegression(max_iter=1000)
-    # model = RandomForestClassifier(n_estimators=100)
-    model.fit(X_train, y_train)
-
-    # predict on test set
-    X_test = np.vstack([feats_pos, feats_neg])
-    y_scores = model.predict_proba(X_test)[:, 1]
-    auc_sup = roc_auc_score(y_true, y_scores)
-    print(f"Supervised (LogReg) AUC:      {auc_sup:.4f}")
-
-    return {'cn_auc': auc_cn, 'sup_auc': auc_sup}
-
-
+# Main pipeline
 if __name__ == "__main__":
-    # load your graph—replace with your own loading code
-    # e.g. G = nx.read_gpickle('subreddit_graph.gpickle')
-    G = nx.karate_club_graph()  # placeholder
+    random.seed(42)
+    monthly_graphs_raw = load_monthly_graphs(path_pattern="data/*.csv")
+    thresholds = [5, 10, 20]  # for edge-weight threshold sweep
+    samplers = {
+        'uniform': sample_uniform_negatives,
+        'distance2': sample_distance2_negatives,
+        'hard': sample_hard_negatives
+    }
 
-    results = evaluate_link_prediction(G)
-    print("Done.", results)
+    records = []
+    for T in thresholds:
+        # apply threshold to raw graphs
+        monthly_graphs = []
+        for month, G_raw in monthly_graphs_raw:
+            G_th = nx.Graph((u, v, d) for u, v, d in G_raw.edges(data=True) if d['weight'] >= T)
+            monthly_graphs.append((month, G_th))
+
+        for G_train, G_test, month in expanding_window_splits(monthly_graphs):
+            pos_test = list(G_test.edges())
+            for sampler_name, sampler_fn in samplers.items():
+                # generate negatives for testing
+                neg_test = sampler_fn(G_train, len(pos_test))
+
+                # Unsupervised: Common Neighbors
+                Xp = extract_features(G_train, pos_test)
+                Xn = extract_features(G_train, neg_test)
+                y_true = np.array([1]*len(pos_test) + [0]*len(neg_test))
+                scores_cn = np.concatenate([Xp[:,0], Xn[:,0]])
+                metrics_cn = evaluate_preds(y_true, scores_cn)
+
+                # Supervised: train on G_train edges
+                pos_train = list(G_train.edges())
+                neg_train = sample_uniform_negatives(G_train, len(pos_train))
+                X_train = np.vstack([extract_features(G_train, pos_train),
+                                     extract_features(G_train, neg_train)])
+                y_train = np.array([1]*len(pos_train) + [0]*len(neg_train))
+                model = LogisticRegression(max_iter=1000)
+                model.fit(X_train, y_train)
+
+                X_test = np.vstack([Xp, Xn])
+                y_scores = model.predict_proba(X_test)[:,1]
+                metrics_sup = evaluate_preds(y_true, y_scores)
+
+                # record
+                records.append({
+                    'threshold': T,
+                    'month': month,
+                    'sampler': sampler_name,
+                    'method': 'common_neighbors',
+                    **metrics_cn
+                })
+                records.append({
+                    'threshold': T,
+                    'month': month,
+                    'sampler': sampler_name,
+                    'method': 'supervised_logreg',
+                    **metrics_sup
+                })
+
+    df = pd.DataFrame(records)
+    df.to_csv("link_prediction_results.csv", index=False)
+    print("Done! Results saved to link_prediction_results.csv")
