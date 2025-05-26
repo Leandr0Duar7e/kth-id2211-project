@@ -1,16 +1,17 @@
 import argparse
+import json
 import re
 import os
 
 import pandas as pd
 import numpy as np
+from tqdm import tqdm
 
 
 def main():
     # Read arguments
     parser = argparse.ArgumentParser()
     parser.add_argument('--comments_file', default=None, type=str, required=True, help='Comments file')
-    parser.add_argument('--subreddits_file', default=None, type=str, required=False, help='Subreddits file')
     parser.add_argument('--target_dir', default=None, type=str, required=True, help='Directory to store comments')
     parser.add_argument('--threshold', default=1, type=int, required=False, help='Threshold for edge weight')
     args = parser.parse_args()
@@ -18,63 +19,84 @@ def main():
     # Create target directory if it doesn't exist
     os.makedirs(args.target_dir, exist_ok=True)
 
-    # Read subreddits
-    subreddits = None
-    if args.subreddits_file:
-        with open(args.subreddits_file, 'r') as f:
-            subreddits = set(f.read().strip().split('\n'))
-
-    # Initialize data structures
-    authors_counts = {}
-    subreddits_to_id = {}
-    id_to_subreddits = []
+    print("Processing comments file...")
 
     # Process comments in chunks
-    for c in pd.read_json(args.comments_file, compression='bz2', lines=True, dtype=False, chunksize=10000):
-        if subreddits:
-            c = c[c.subreddit.isin(subreddits)]
-        
-        # Filter out deleted authors
-        c = c[c['author'] != '[deleted]']
-        
-        # Process each comment
-        for _, comm in c.iterrows():
-            if comm['author'] not in authors_counts:
-                authors_counts[comm['author']] = {comm['subreddit']: 1}
-            else:
-                authors_counts[comm['author']][comm['subreddit']] = authors_counts[comm['author']].get(comm['subreddit'], 0) + 1
-            
-            if comm['subreddit'] not in subreddits_to_id:
-                subreddits_to_id[comm['subreddit']] = len(subreddits_to_id)
-                id_to_subreddits.append(comm['subreddit'])
+    author_subreddit_counts = pd.DataFrame()
+    
+    # Count total number of lines for progress bar
+    total_lines = sum(1 for _ in open(args.comments_file, 'rb'))
+    
+    # Load bot users
+    bot_users = set()
+    with open(os.path.join('data', 'metadata', 'users_metadata.json'), 'r') as f:
+        lines = f.readlines()
+        for line in lines:
+            user_metadata = json.loads(line)
+            if user_metadata['bot'] == 1:
+                bot_users.add(user_metadata['author'])
 
+    # Process comments in chunks
+    for chunk in tqdm(pd.read_json(args.comments_file, compression='bz2', lines=True, dtype=False, chunksize=100000),
+                     total=total_lines//100000 + 1,
+                     desc="Processing chunks"):
+        # Filter out deleted authors
+        chunk = chunk[chunk['author'] != '[deleted]']
+        # Filter out bot users
+        chunk = chunk[~chunk['author'].isin(bot_users)]
+
+        # Count author-subreddit interactions using groupby
+        counts = chunk.groupby(['author', 'subreddit']).size().reset_index(name='count')
+        author_subreddit_counts = pd.concat([author_subreddit_counts, counts])
+
+    print("\nAggregating results...")
+
+    # Aggregate counts across chunks
+    author_subreddit_counts = author_subreddit_counts.groupby(['author', 'subreddit'])['count'].sum().reset_index()
+    
+    # Filter by threshold
+    author_subreddit_counts = author_subreddit_counts[author_subreddit_counts['count'] >= args.threshold]
+    
+    # Create subreddit mapping
+    unique_subreddits = author_subreddit_counts['subreddit'].unique()
+    subreddits_to_id = {sub: idx for idx, sub in enumerate(unique_subreddits)}
+    id_to_subreddits = list(unique_subreddits)
     num_subreddits = len(subreddits_to_id)
 
-    # Create adjacency matrix
-    adjacency_mat = np.zeros((num_subreddits, num_subreddits), dtype=np.int32)
-    for author in authors_counts:
-        for i in range(num_subreddits):
-            for j in range(i + 1, num_subreddits):
-                subreddit_i = id_to_subreddits[i]
-                subreddit_j = id_to_subreddits[j]
-                if (subreddit_i in authors_counts[author] and 
-                    subreddit_j in authors_counts[author] and
-                    authors_counts[author][subreddit_i] >= args.threshold and 
-                    authors_counts[author][subreddit_j] >= args.threshold):
-                    adjacency_mat[i][j] += 1
-                    adjacency_mat[j][i] = adjacency_mat[i][j]  # Make matrix symmetric
+    print(f"\nFound {num_subreddits} unique subreddits")
+    print("Creating adjacency matrix...")
 
+    # Create a binary matrix where each row is an author and each column is a subreddit
+    # 1 if author is active in subreddit, 0 otherwise
+    author_subreddit_matrix = pd.crosstab(
+        author_subreddit_counts['author'],
+        author_subreddit_counts['subreddit']
+    )
+    
+    # Convert to numpy array for faster computation
+    author_subreddit_matrix = author_subreddit_matrix.values
+    
+    # Create adjacency matrix by multiplying the matrix with its transpose
+    # This gives us the number of authors that are active in both subreddits
+    adjacency_mat = np.dot(author_subreddit_matrix.T, author_subreddit_matrix)
+    
+    # Zero out the diagonal (self-connections)
+    np.fill_diagonal(adjacency_mat, 0)
+
+    print("Writing results to file...")
     # Store graph
-    target_file = '{}/graph_{}.txt'.format(
-        args.target_dir, re.findall(r'\d{4}-\d{2}', args.comments_file)[0]
+    target_file = '{}/graph_{}_t{}.txt'.format(
+        args.target_dir, re.findall(r'\d{4}-\d{2}', args.comments_file)[0], args.threshold
     )
 
     with open(target_file, 'w') as f:
         f.write('node_1,node_2,weight\n')
-        for i in range(num_subreddits):
+        for i in tqdm(range(num_subreddits), desc="Writing edges"):
             for j in range(i + 1, num_subreddits):
                 if adjacency_mat[i][j] > 0:
                     f.write(f'{id_to_subreddits[i]},{id_to_subreddits[j]},{adjacency_mat[i][j]}\n')
+
+    print(f"\nDone! Results written to {target_file}")
 
 
 if __name__ == '__main__':
