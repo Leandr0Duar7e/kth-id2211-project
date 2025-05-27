@@ -1,5 +1,57 @@
 import argparse
 import re
+<<<<<<< HEAD
+import logging
+import pandas as pd
+from typing import Optional
+from pathlib import Path
+import pandas as pd
+import logging
+from typing import Optional, Set
+
+
+
+def process_comments_file(
+    comments_file: Path,
+    aggregate_chunk,
+    merge_summaries,
+    chunksize: int = 10_000,
+
+
+) -> pd.DataFrame:
+    """
+    Load comments from a bz2-encoded JSON-lines file in chunks,
+    aggregate sentiment statistics, and classify sentiment.
+    Returns a DataFrame summary for this file.
+    """
+    try:
+        reader = pd.read_json(
+            comments_file,
+            compression='bz2',
+            lines=True,
+            chunksize=chunksize,
+            dtype=False
+        )
+    except ValueError as e:
+        logging.error("Error reading JSON from %s: %s", comments_file, e)
+        raise
+    except FileNotFoundError:
+        msg = f"Comments file not found: {comments_file}"
+        logging.exception(msg)
+        raise
+
+    cumulative: Optional[pd.DataFrame] = None
+    for idx, chunk in enumerate(reader):
+        logging.debug("Chunk %d: %d rows", idx, len(chunk))
+        chunk_summary = aggregate_chunk(chunk)
+        cumulative = merge_summaries(cumulative, chunk_summary)
+
+    if cumulative is None or cumulative.empty:
+        logging.warning("No data loaded from %s", comments_file)
+        return pd.DataFrame()
+
+    return cumulative
+=======
 import pandas as pd
 from pathlib import Path
 from typing import Optional, Set
@@ -115,6 +167,7 @@ class CommentLoader:
             if col not in comments_df.columns:
                 comments_df[col] = pd.NA
         return comments_df[final_columns]
+>>>>>>> main
 
 
 def main():
