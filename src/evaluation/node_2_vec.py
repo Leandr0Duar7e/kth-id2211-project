@@ -8,7 +8,6 @@ from node2vec import Node2Vec
 import os
 
 # ---- CONFIGURATION ----
-DATA_GLOB            = "data/processed/graphs/leandro_graph_*.csv"
 NEG_SAMPLE_STRATEGIES = ["uniform", "distance_two"]
 # node2vec hyperparams
 EMB_DIM     = 64
@@ -21,11 +20,11 @@ Q           = 1.0
 def load_monthly_graphs():
     base_dir  = os.path.dirname(os.path.abspath(__file__))
     graphs_dir = os.path.join(base_dir, "..", "..", "data", "processed", "graphs")
-    path_pattern = os.path.join(graphs_dir, "graph_*.csv")
+    path_pattern = os.path.join(graphs_dir, "leandro_graph_*.csv")
 
     graphs = []
     for fn in sorted(glob.glob(path_pattern)):
-        month = os.path.basename(fn).replace("graph_", "").replace(".csv", "")
+        month = os.path.basename(fn).replace("leandro_graph_", "").replace(".csv", "")
         df = pd.read_csv(fn)
         G  = nx.Graph()
         for u, v, w in df.values:
@@ -68,10 +67,14 @@ def compute_node2vec_scores(G, edge_list):
 
     # helper for cosine similarity
     def cos_sim(u, v):
-        ui = model.wv.get_vector(str(u))
-        vi = model.wv.get_vector(str(v))
-        denom = np.linalg.norm(ui) * np.linalg.norm(vi)
-        return float(ui.dot(vi) / denom) if denom > 0 else 0.0
+        try:
+            ui = model.wv.get_vector(str(u))
+            vi = model.wv.get_vector(str(v))
+            denom = np.linalg.norm(ui) * np.linalg.norm(vi)
+            return float(ui.dot(vi) / denom) if denom > 0 else 0.0
+        except KeyError:
+            # Return 0 similarity for nodes that don't exist in the training graph
+            return 0.0
 
     # compute a similarity score for each edge pair
     return np.array([cos_sim(u, v) for u, v in edge_list])
