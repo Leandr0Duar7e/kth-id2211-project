@@ -1,6 +1,9 @@
 # Leandro
 run_sample.py
 sample_test/
+.python-version*
+venv310/
+comments_topic_sentiment/
 
 Resources/
 NeurIPS-Template/

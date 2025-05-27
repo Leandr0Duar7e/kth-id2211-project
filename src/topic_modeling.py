@@ -11,6 +11,7 @@ from nltk.stem import WordNetLemmatizer, SnowballStemmer
 from nltk.tokenize import word_tokenize
 import nltk
 from collections import Counter
+import string
 
 # Ensure NLTK resources are available (run this once if needed)
 try:
@@ -563,6 +564,372 @@ class SimpleLdaTopicModeler:
         self.dictionary = None
         self.lda_model = None
         self.topic_words = {}
+        # Extended stopwords list for political content
+        self.stopwords = set(GENSIM_STOPWORDS).union(
+            {
+                # Standard English stopwords (some overlap with GENSIM, but ensures coverage)
+                "probably",
+                "end",
+                "knows",
+                "states",
+                "dr.",
+                "vote",
+                "voting",
+                "mean",
+                "nice",
+                "great",
+                "reply",
+                "points",
+                "nearly",
+                "looking",
+                "hard",
+                "passed",
+                "making",
+                "better",
+                "result",
+                "frankly",
+                "agree",
+                "saying",
+                "important",
+                "certainly",
+                "political",
+                "called",
+                "exactly",
+                "dude",
+                "wrong",
+                "away",
+                "comparison",
+                "effort",
+                "little",
+                "regular",
+                "lots",
+                "based",
+                "gets",
+                "position",
+                "want",
+                "ones",
+                "took",
+                "short",
+                "makes",
+                "elected",
+                "realize",
+                "calling",
+                "dont",
+                "open",
+                "catch",
+                "late",
+                "significatn",
+                "candidate",
+                "maybe",
+                "state",
+                "course",
+                "form",
+                "reason",
+                "remember",
+                "capslock",
+                "mind",
+                "talk",
+                "rest",
+                "job",
+                "sense",
+                "code",
+                "yeah",
+                "responses",
+                "feel",
+                "thought",
+                "speak",
+                "instead",
+                "read",
+                "wow",
+                "friend",
+                "country",
+                "completely",
+                "soon",
+                "crazy",
+                "wish",
+                "long",
+                "bunch",
+                "question",
+                "shows",
+                "members",
+                "definitely",
+                "moving",
+                "yes",
+                "assuming",
+                "understand",
+                "happens",
+                "near",
+                "caliming",
+                "reach",
+                "needed",
+                "example",
+                "support",
+                "bro",
+                "wait",
+                "a",
+                "about",
+                "above",
+                "after",
+                "again",
+                "against",
+                "all",
+                "am",
+                "an",
+                "and",
+                "any",
+                "are",
+                "as",
+                "at",
+                "be",
+                "because",
+                "been",
+                "before",
+                "being",
+                "below",
+                "between",
+                "both",
+                "but",
+                "by",
+                "can",
+                "did",
+                "do",
+                "does",
+                "doing",
+                "down",
+                "during",
+                "each",
+                "few",
+                "for",
+                "from",
+                "further",
+                "had",
+                "has",
+                "have",
+                "having",
+                "he",
+                "her",
+                "here",
+                "hers",
+                "herself",
+                "him",
+                "himself",
+                "his",
+                "how",
+                "i",
+                "if",
+                "in",
+                "into",
+                "is",
+                "it",
+                "its",
+                "itself",
+                "just",
+                "me",
+                "more",
+                "most",
+                "my",
+                "myself",
+                "no",
+                "nor",
+                "not",
+                "now",
+                "of",
+                "off",
+                "on",
+                "once",
+                "only",
+                "or",
+                "other",
+                "our",
+                "ours",
+                "ourselves",
+                "out",
+                "over",
+                "own",
+                "s",
+                "same",
+                "she",
+                "should",
+                "so",
+                "some",
+                "such",
+                "t",
+                "than",
+                "that",
+                "the",
+                "their",
+                "theirs",
+                "them",
+                "themselves",
+                "then",
+                "there",
+                "these",
+                "they",
+                "this",
+                "those",
+                "through",
+                "to",
+                "too",
+                "under",
+                "until",
+                "up",
+                "very",
+                "was",
+                "we",
+                "were",
+                "what",
+                "when",
+                "where",
+                "which",
+                "while",
+                "who",
+                "whom",
+                "why",
+                "will",
+                "with",
+                "you",
+                "your",
+                "yours",
+                "yourself",
+                "yourselves",
+                # Contractions and common informalities
+                "n't",
+                "'s",
+                "'re",
+                "'ve",
+                "'ll",
+                "'d",
+                "'m",
+                "ca",
+                "wo",
+                "sha",
+                "gon",
+                "wan",
+                "got",
+                "get",
+                "lot",
+                "let",
+                # Common words that add little meaning in general discussion context
+                "also",
+                "would",
+                "could",
+                "should",
+                "might",
+                "may",
+                "must",
+                "really",
+                "good",
+                "well",
+                "much",
+                "many",
+                "one",
+                "two",
+                "see",
+                "say",
+                "said",
+                "says",
+                "make",
+                "made",
+                "take",
+                "new",
+                "old",
+                "big",
+                "small",
+                "high",
+                "low",
+                "even",
+                "still",
+                "since",
+                "back",
+                "way",
+                "time",
+                "people",
+                "person",
+                "thing",
+                "things",
+                "something",
+                "nothing",
+                "everything",
+                "another",
+                "other",
+                "others",
+                "first",
+                "last",
+                "next",
+                "look",
+                "looks",
+                "use",
+                "used",
+                "using",
+                "come",
+                "comes",
+                "came",
+                "give",
+                "gives",
+                "gave",
+                "ask",
+                "asks",
+                "asked",
+                "tell",
+                "tells",
+                "told",
+                "try",
+                "tries",
+                "tried",
+                "day",
+                "days",
+                "week",
+                "month",
+                "year",
+                "years",
+                "today",
+                "tomorrow",
+                "yesterday",
+                # Reddit specific / common internet slang
+                "url",
+                "comment",
+                "post",
+                "thread",
+                "subreddit",
+                "reddit",
+                "op",
+                "lol",
+                "wtf",
+                "imo",
+                "btw",
+                "http",
+                "https",
+                "www",
+                "com",
+                "org",
+                "net",
+                "gov",
+                "edu",
+                "thanks",
+                "please",
+                "sorry",
+                "actually",
+                "point",
+                "article",
+                "link",
+                "don",
+                "nt",
+                "re",
+                "ve",
+                "ll",
+                "d",
+                "m",
+                "s",
+                "think",
+                "going",
+                "like",
+                "man",
+                "know",
+                "does",
+                "has",
+                "did",
+            }
+        )
 
         if self.lemmatize_flag:
             self.lemmatizer = WordNetLemmatizer()
@@ -576,11 +943,22 @@ class SimpleLdaTopicModeler:
         )
 
     def _preprocess_text(self, document: str) -> List[str]:
-        """Tokenizes, removes stopwords, and optionally lemmatizes."""
-        # For already processed text, just split by space and filter for minimum length
+        """Tokenizes, removes stopwords, and filters for minimum length."""
+        # For already processed text, split by space and filter for stopwords and minimum length
         # This assumes body_cleaned is already tokenized and cleaned
         return [
-            token for token in document.split() if len(token) >= self.min_word_length
+            token
+            for token in document.lower().split()
+            if (
+                token not in self.stopwords
+                and len(token) >= self.min_word_length
+                and not token.startswith("'")  # remove tokens like 's
+                and not token.startswith("...")  # remove ellipsis tokens
+                and not token.isdigit()  # remove numbers
+                and not all(
+                    c in string.punctuation for c in token
+                )  # remove tokens made of only punctuation
+            )
         ]
 
     def fit_transform(
@@ -608,27 +986,35 @@ class SimpleLdaTopicModeler:
         # Just tokenize by whitespace since text is already cleaned
         documents = aggregated_texts_df[text_column].astype(str).fillna("").tolist()
         preprocessed_docs = [self._preprocess_text(doc) for doc in documents]
-        preprocessed_docs = [
-            doc for doc in preprocessed_docs if doc
-        ]  # Remove empty docs
+        # Remove documents that become too short after preprocessing (e.g., < 5 words)
+        preprocessed_docs = [doc for doc in preprocessed_docs if len(doc) >= 5]
 
         if not preprocessed_docs:
             print(
-                "Warning: No processable documents after preprocessing. Skipping LDA."
+                "Warning: No processable documents after preprocessing (all too short). Skipping LDA."
             )
             aggregated_texts_df["topic_id"] = -1
             return aggregated_texts_df
 
-        # Create dictionary and corpus - with minimal filtering since text is already processed
+        # Create dictionary and corpus - with filtering optimized for meaningful topics
         self.dictionary = corpora.Dictionary(preprocessed_docs)
-        # Only filter out terms that appear in single documents (no_below=2)
-        # but keep most common terms (no_above=0.95)
-        self.dictionary.filter_extremes(no_below=2, no_above=0.95)
+
+        # Apply more aggressive filtering for political content:
+        # - no_below=3: Remove terms that appear in fewer than 3 documents (remove rare terms)
+        # - no_above=0.6: Remove terms that appear in more than 60% of documents (more aggressive than 0.7)
+        # - keep_n=3000: Keep only the top 3000 most frequent terms after filtering (more aggressive)
+        self.dictionary.filter_extremes(no_below=3, no_above=0.6, keep_n=3000)
 
         corpus = [self.dictionary.doc2bow(doc) for doc in preprocessed_docs]
 
-        # Filter empty items in corpus
-        valid_indices = [i for i, c in enumerate(corpus) if c]
+        # Filter empty items in corpus (documents with no words left after dictionary filtering)
+        valid_indices_texts_map = {
+            i: aggregated_texts_df.index[original_idx]
+            for i, (original_idx, c) in enumerate(
+                zip(aggregated_texts_df.index, corpus)
+            )
+            if c
+        }
         filtered_corpus = [c for c in corpus if c]
 
         if not filtered_corpus:
@@ -636,44 +1022,51 @@ class SimpleLdaTopicModeler:
             aggregated_texts_df["topic_id"] = -1
             return aggregated_texts_df
 
-        # Train LDA model
+        # Train LDA model with adjusted alpha and eta parameters for political content
         print(
             f"Training LDA model with {self.num_topics} topics on {len(filtered_corpus)} documents..."
         )
+
+        # Use asymmetric alpha (some topics more prevalent than others)
+        # Lower eta (makes each topic more distinct with fewer shared words)
         self.lda_model = models.LdaModel(
             corpus=filtered_corpus,
             id2word=self.dictionary,
             num_topics=self.num_topics,
             passes=self.passes,
             iterations=self.iterations,
+            alpha="asymmetric",  # Let some topics be more common than others
+            eta=0.01,  # Sparse word-topic distribution (fewer words per topic)
             random_state=42,  # For reproducibility
+            chunksize=100,  # Process 100 documents at a time
+            update_every=1,  # Update model after each chunk
         )
 
         # Store topic words for reference
         self.topic_words = {}
         for topic_id in range(self.num_topics):
+            # Get more words per topic to better understand it
             top_words = [
-                word for word, _ in self.lda_model.show_topic(topic_id, topn=10)
+                word for word, _ in self.lda_model.show_topic(topic_id, topn=15)
             ]
             self.topic_words[topic_id] = ", ".join(top_words)
 
         # Assign topics to documents
-        topic_assignments = []
-        for i, doc_index in enumerate(valid_indices):
-            if filtered_corpus[i]:
-                # Get the topic with highest probability
-                topic_dist = self.lda_model.get_document_topics(filtered_corpus[i])
-                dominant_topic = (
-                    max(topic_dist, key=lambda x: x[1])[0] if topic_dist else -1
-                )
-                topic_assignments.append((doc_index, dominant_topic))
+        aggregated_texts_df["topic_id"] = -1  # Default value for all rows initially
 
-        # Create topic_id column
-        aggregated_texts_df["topic_id"] = -1  # Default value
-        for doc_idx, topic_id in topic_assignments:
-            aggregated_texts_df.iloc[
-                doc_idx, aggregated_texts_df.columns.get_loc("topic_id")
-            ] = topic_id
+        for i, corpus_doc in enumerate(filtered_corpus):
+            original_df_idx = valid_indices_texts_map[i]
+            if corpus_doc:  # Ensure document is not empty
+                topic_dist = self.lda_model.get_document_topics(
+                    corpus_doc, minimum_probability=0.15
+                )
+                if topic_dist:  # Check if any topic meets the probability threshold
+                    dominant_topic = max(topic_dist, key=lambda x: x[1])[0]
+                    aggregated_texts_df.loc[original_df_idx, "topic_id"] = (
+                        dominant_topic
+                    )
+                # else: keep as -1 if no topic is strong enough
+            # else: keep as -1 if doc was empty after bow creation (should be rare now)
 
         print("LDA topic modeling complete.")
         topic_counts = aggregated_texts_df["topic_id"].value_counts()
