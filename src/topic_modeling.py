@@ -534,6 +534,158 @@ class LdaTopicModeler:
         return self.lda_to_predefined_mapping
 
 
+class SimpleLdaTopicModeler:
+    """Performs topic modeling using LDA with Gensim without mapping to predefined topics."""
+
+    def __init__(
+        self,
+        num_topics: int = 20,
+        passes: int = 5,
+        iterations: int = 30,
+        min_word_length: int = 3,
+        lemmatize: bool = False,  # Set default to False since text is already processed
+    ):
+        """
+        Initializes the SimpleLdaTopicModeler.
+
+        Args:
+            num_topics (int): Number of topics for LDA to find. Defaults to 20.
+            passes (int): Number of passes for LDA training. Defaults to 5.
+            iterations (int): Number of iterations for LDA training. Defaults to 30.
+            min_word_length (int): Minimum word length to keep. Defaults to 3.
+            lemmatize (bool): Whether to lemmatize words. Defaults to False since text is already processed.
+        """
+        self.num_topics = num_topics
+        self.passes = passes
+        self.iterations = iterations
+        self.min_word_length = min_word_length
+        self.lemmatize_flag = lemmatize
+        self.dictionary = None
+        self.lda_model = None
+        self.topic_words = {}
+
+        if self.lemmatize_flag:
+            self.lemmatizer = WordNetLemmatizer()
+
+    def _lemmatize(self, text: str) -> str:
+        """Lemmatizes text if lemmatize_flag is set."""
+        if not self.lemmatize_flag:
+            return text
+        return " ".join(
+            [self.lemmatizer.lemmatize(word) for word in word_tokenize(text)]
+        )
+
+    def _preprocess_text(self, document: str) -> List[str]:
+        """Tokenizes, removes stopwords, and optionally lemmatizes."""
+        # For already processed text, just split by space and filter for minimum length
+        # This assumes body_cleaned is already tokenized and cleaned
+        return [
+            token for token in document.split() if len(token) >= self.min_word_length
+        ]
+
+    def fit_transform(
+        self,
+        aggregated_texts_df: pd.DataFrame,
+        text_column: str = "merged_body_cleaned",
+    ) -> pd.DataFrame:
+        """
+        Fits LDA model to aggregated texts and assigns topic IDs.
+
+        Args:
+            aggregated_texts_df (pd.DataFrame): DataFrame with 'link_id' and a text column.
+            text_column (str): Name of the column containing the aggregated text.
+
+        Returns:
+            pd.DataFrame: The input DataFrame with an added 'topic_id' column.
+        """
+        if aggregated_texts_df.empty or text_column not in aggregated_texts_df.columns:
+            print(
+                "Warning: Aggregated texts DataFrame is empty or lacks the text column. Skipping LDA."
+            )
+            aggregated_texts_df["topic_id"] = -1
+            return aggregated_texts_df
+
+        # Just tokenize by whitespace since text is already cleaned
+        documents = aggregated_texts_df[text_column].astype(str).fillna("").tolist()
+        preprocessed_docs = [self._preprocess_text(doc) for doc in documents]
+        preprocessed_docs = [
+            doc for doc in preprocessed_docs if doc
+        ]  # Remove empty docs
+
+        if not preprocessed_docs:
+            print(
+                "Warning: No processable documents after preprocessing. Skipping LDA."
+            )
+            aggregated_texts_df["topic_id"] = -1
+            return aggregated_texts_df
+
+        # Create dictionary and corpus - with minimal filtering since text is already processed
+        self.dictionary = corpora.Dictionary(preprocessed_docs)
+        # Only filter out terms that appear in single documents (no_below=2)
+        # but keep most common terms (no_above=0.95)
+        self.dictionary.filter_extremes(no_below=2, no_above=0.95)
+
+        corpus = [self.dictionary.doc2bow(doc) for doc in preprocessed_docs]
+
+        # Filter empty items in corpus
+        valid_indices = [i for i, c in enumerate(corpus) if c]
+        filtered_corpus = [c for c in corpus if c]
+
+        if not filtered_corpus:
+            print("Warning: Corpus is empty after dictionary filtering. Skipping LDA.")
+            aggregated_texts_df["topic_id"] = -1
+            return aggregated_texts_df
+
+        # Train LDA model
+        print(
+            f"Training LDA model with {self.num_topics} topics on {len(filtered_corpus)} documents..."
+        )
+        self.lda_model = models.LdaModel(
+            corpus=filtered_corpus,
+            id2word=self.dictionary,
+            num_topics=self.num_topics,
+            passes=self.passes,
+            iterations=self.iterations,
+            random_state=42,  # For reproducibility
+        )
+
+        # Store topic words for reference
+        self.topic_words = {}
+        for topic_id in range(self.num_topics):
+            top_words = [
+                word for word, _ in self.lda_model.show_topic(topic_id, topn=10)
+            ]
+            self.topic_words[topic_id] = ", ".join(top_words)
+
+        # Assign topics to documents
+        topic_assignments = []
+        for i, doc_index in enumerate(valid_indices):
+            if filtered_corpus[i]:
+                # Get the topic with highest probability
+                topic_dist = self.lda_model.get_document_topics(filtered_corpus[i])
+                dominant_topic = (
+                    max(topic_dist, key=lambda x: x[1])[0] if topic_dist else -1
+                )
+                topic_assignments.append((doc_index, dominant_topic))
+
+        # Create topic_id column
+        aggregated_texts_df["topic_id"] = -1  # Default value
+        for doc_idx, topic_id in topic_assignments:
+            aggregated_texts_df.iloc[
+                doc_idx, aggregated_texts_df.columns.get_loc("topic_id")
+            ] = topic_id
+
+        print("LDA topic modeling complete.")
+        topic_counts = aggregated_texts_df["topic_id"].value_counts()
+        print(f"Topic distribution:\n{topic_counts}")
+
+        return aggregated_texts_df
+
+    def get_topic_words(self) -> Dict[int, str]:
+        """Returns the top words for each topic."""
+        return self.topic_words
+
+
 if __name__ == "__main__":
     # This is a placeholder for direct testing if needed.
     # Actual execution will be orchestrated by sentiment_analysis.py

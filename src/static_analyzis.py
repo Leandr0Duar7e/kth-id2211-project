@@ -75,11 +75,11 @@ def calculate_static_metrics(G: nx.Graph, graph_name: str) -> dict:
 
     if G_cc.number_of_nodes() > 1:
         metrics["avg_shortest_path"] = nx.average_shortest_path_length(
-            G_cc, weight="weight" if G_cc.is_weighted() else None
+            G_cc, weight="weight" if nx.is_weighted(G_cc) else None
         )
         try:
             metrics["diameter"] = nx.diameter(
-                G_cc, weight="weight" if G_cc.is_weighted() else None
+                G_cc, weight="weight" if nx.is_weighted(G_cc) else None
             )
         except (
             nx.NetworkXError
