@@ -5,28 +5,21 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from pathlib import Path
 import community as community_louvain  # For Louvain algorithm
-from collections import defaultdict
-import itertools
-import os  # For sys.path manipulation
 
 # Adjust path to import utils
 import sys
 
-# Assuming utils.py is in the same directory (src)
-# If static_analyzis.py is in src, and utils.py is in src, this should work.
-# If running from project root (FinalProject), then from src import utils
 try:
     from utils import get_project_root, load_network, ensure_dir
 except ImportError:
     # Fallback if running script directly from src or if PYTHONPATH isn't set
-    # This assumes 'utils.py' is in the same directory as this script
     # Or try to find project root to add to path
     current_script_path = Path(__file__).resolve()
     project_root_path = current_script_path.parent.parent
     src_path = current_script_path.parent
     if str(src_path) not in sys.path:
         sys.path.insert(0, str(src_path))
-    if str(project_root_path) not in sys.path:  # If utils is in FinalProject/src
+    if str(project_root_path) not in sys.path:
         sys.path.insert(0, str(project_root_path))
     from utils import get_project_root, load_network, ensure_dir
 

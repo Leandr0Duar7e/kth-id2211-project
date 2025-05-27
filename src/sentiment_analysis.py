@@ -17,7 +17,7 @@ import torch  # For checking GPU availability
 # Project specific imports
 from utils import get_project_root, ensure_dir, load_bot_user_ids
 from load_data.load_comments import CommentLoader
-from topic_modeling import GuidedTopicModeler, DEFAULT_SEED_TOPICS
+from topic_modeling import LdaTopicModeler, DEFAULT_SEED_TOPICS
 
 
 class SentimentAnalyzer:
@@ -185,6 +185,9 @@ class CommentProcessor:
         users_metadata_file: Optional[Path] = None,
         seed_topic_list: List[List[str]] = DEFAULT_SEED_TOPICS,
         sentiment_model_device: Optional[str] = None,
+        num_lda_topics: int = 15,
+        lda_passes: int = 10,
+        lda_iterations: int = 50,
     ):
         """
         Initializes the CommentProcessor.
@@ -193,15 +196,19 @@ class CommentProcessor:
             users_metadata_file (Optional[Path]): Path to the user metadata for bot filtering.
             seed_topic_list (List[List[str]]): List of seed keywords for guided topic modeling.
             sentiment_model_device (Optional[str]): "cpu" or "cuda" for sentiment model.
+            num_lda_topics (int): Number of topics for LDA. Defaults to 15.
+            lda_passes (int): Number of passes for LDA training.
+            lda_iterations (int): Number of iterations for LDA training.
         """
         self.bot_user_ids = (
             load_bot_user_ids(users_metadata_file) if users_metadata_file else set()
         )
-        self.topic_modeler = GuidedTopicModeler(
+        self.topic_modeler = LdaTopicModeler(
             seed_topic_list=seed_topic_list,
-            min_topic_size=15,  # Higher minimum size
-            nr_topics=25,  # cap on total topics (seed topics + some emergent ones)
-            disable_reduction_for_small_datasets=False,
+            num_lda_topics=num_lda_topics,
+            passes=lda_passes,
+            iterations=lda_iterations,
+            lemmatize=True,
         )
         self.sentiment_analyzer = SentimentAnalyzer(device=sentiment_model_device)
         self.project_root = get_project_root()
@@ -215,12 +222,7 @@ class CommentProcessor:
     ):
         """
         Processes a single monthly comment file: loads, filters, topics, sentiments, and saves.
-
-        Args:
-            comments_file_path (Path): Path to the monthly comments bz2 file.
-            output_dir (Path): Directory to save the processed file.
-            subreddits_to_filter (Optional[Set[str]]): Set of subreddits to focus on. Defaults to None.
-            output_filename (Optional[str]): Custom name for the output file. Defaults to None.
+        Also prints raw LDA topic details for manual review.
         """
         print(f"\n--- Processing {comments_file_path.name} ---")
         start_time = time.time()
@@ -228,8 +230,7 @@ class CommentProcessor:
         # 1. Load and filter comments
         print("Step 1: Loading and filtering comments...")
         loader = CommentLoader(comments_file_path, bot_user_ids=self.bot_user_ids)
-        # Columns needed: id, subreddit_id, body_cleaned (for topic/sentiment), author (for bot filtering)
-        cols_for_loading = ["id", "author", "subreddit_id", "body_cleaned"]
+        cols_for_loading = ["id", "author", "subreddit_id", "body_cleaned", "link_id"]
         comments_df = loader.load_and_filter_comments(
             subreddits=subreddits_to_filter, columns_to_keep=cols_for_loading
         )
@@ -238,67 +239,122 @@ class CommentProcessor:
             comments_df.empty
             or "body_cleaned" not in comments_df.columns
             or comments_df["body_cleaned"].isnull().all()
+            or "link_id" not in comments_df.columns
         ):
             print(
-                f"No processable comments found in {comments_file_path.name} after loading/filtering. Skipping further processing."
+                f"No processable comments (or missing 'body_cleaned'/'link_id') found in {comments_file_path.name} after loading/filtering. Skipping further processing."
             )
             return
 
-        # Keep only necessary columns for further processing to save memory
-        comments_df = comments_df[["id", "subreddit_id", "body_cleaned"]]
-        comments_df["body_cleaned"] = (
-            comments_df["body_cleaned"].astype(str).fillna("")
-        )  # Ensure string type and handle NaNs
+        comments_df["body_cleaned"] = comments_df["body_cleaned"].astype(str).fillna("")
+        comments_df["link_id"] = comments_df["link_id"].astype(str).fillna("NO_LINK_ID")
 
         print(f"Loaded {len(comments_df)} comments after filtering.")
         if comments_df.empty:
             print(f"No comments to process for {comments_file_path.name}.")
             return
 
-        # 2. Topic Modeling
-        print("\nStep 2: Performing guided topic modeling...")
-        comments_df, topic_map = self.topic_modeler.fit_transform(
-            comments_df, text_column="body_cleaned"
-        )
-        # topic_map can be saved or logged if needed: print(f"Topic ID to Label Map: {topic_map}")
+        print("\nStep 2: Performing LDA topic modeling on aggregated texts...")
 
-        # 3. Sentiment Analysis
-        print("\nStep 3: Performing sentiment analysis...")
-        # Mark empty comments to skip sentiment analysis
-        comments_df["is_empty_comment"] = (
+        def aggregate_texts(series):
+            return " ".join(
+                text for text in series if pd.notna(text) and str(text).strip() != ""
+            )
+
+        aggregated_texts_df = (
+            comments_df.groupby("link_id")["body_cleaned"]
+            .apply(aggregate_texts)
+            .reset_index()
+        )
+        aggregated_texts_df.rename(
+            columns={"body_cleaned": "merged_body_cleaned"}, inplace=True
+        )
+        aggregated_texts_df = aggregated_texts_df[
+            aggregated_texts_df["merged_body_cleaned"].str.strip() != ""
+        ]
+
+        if aggregated_texts_df.empty:
+            print("No non-empty threads to model topics for. Assigning default topic.")
+            comments_df["topic_label"] = "NO_TOPIC_NO_THREADS"
+        else:
+            aggregated_texts_with_topics_df = self.topic_modeler.fit_transform(
+                aggregated_texts_df, text_column="merged_body_cleaned"
+            )
+            thread_topics_df = aggregated_texts_with_topics_df[
+                ["link_id", "topic_label"]
+            ]
+            comments_df = pd.merge(
+                comments_df, thread_topics_df, on="link_id", how="left"
+            )
+            comments_df["topic_label"].fillna("NO_TOPIC_THREAD_UNMODELED", inplace=True)
+
+            # --- Print LDA Topic Details for Manual Review ---
+            print("\n--- LDA Topic Details for Manual Review ---")
+            raw_lda_topics = self.topic_modeler.get_topic_info()
+            if raw_lda_topics:
+                print("Raw LDA Topics (Top Words):")
+                for topic_id, word_probs in raw_lda_topics:
+                    words = ", ".join([wp[0] for wp in word_probs])
+                    print(f"  LDA Topic {topic_id}: {words}")
+            else:
+                print("Could not retrieve raw LDA topic information.")
+
+            print("\nAttempted Mapping (LDA ID -> Predefined/Generated Label):")
+            mapping = self.topic_modeler.get_lda_to_predefined_mapping()
+            if mapping:
+                for lda_id, predefined_label in mapping.items():
+                    print(f"  LDA Topic {lda_id} -> {predefined_label}")
+            else:
+                print("No mapping information available.")
+            print("--- End LDA Topic Details ---\n")
+            # --- End Print LDA Topic Details ---
+
+        # 3. Sentiment Analysis (on individual comments)
+        print("\nStep 3: Performing sentiment analysis on individual comments...")
+        # Mark empty comments to skip sentiment analysis (original individual comments)
+        comments_df["is_empty_comment_body"] = (
             comments_df["body_cleaned"].astype(str).str.strip().eq("")
         )
 
         # Only perform sentiment analysis on non-empty comments
-        non_empty_mask = ~comments_df["is_empty_comment"]
+        non_empty_mask = ~comments_df["is_empty_comment_body"]
 
         # Initialize sentiment column with None
         comments_df["sentiment"] = None
 
         if non_empty_mask.any():
-            # Use 'body_cleaned' for sentiment as it's the cleaned text available
             texts_for_sentiment = comments_df.loc[
                 non_empty_mask, "body_cleaned"
             ].tolist()
             sentiments = self.sentiment_analyzer.predict_sentiment_batch(
                 texts_for_sentiment
             )
-
             # Assign sentiments only to non-empty comments
             comments_df.loc[non_empty_mask, "sentiment"] = sentiments
-
-        # For empty comments, set sentiment to null (None/NaN)
-        # This is already done by initializing with None
+            # Convert sentiment to integer if all are non-null after prediction, else keep as float
+            if comments_df["sentiment"].notna().all() and non_empty_mask.any():
+                comments_df["sentiment"] = comments_df["sentiment"].astype("Int64")
 
         # Drop the temporary column
-        comments_df = comments_df.drop(columns=["is_empty_comment"])
+        comments_df = comments_df.drop(columns=["is_empty_comment_body"])
 
         # 4. Finalize DataFrame and Save
         print("\nStep 4: Finalizing and saving results...")
-        # Columns to save: id, subreddit_id, topic_label (more readable), sentiment, body_cleaned
-        final_df = comments_df[
-            ["id", "subreddit_id", "topic_label", "sentiment", "body_cleaned"]
+        # Columns to save: id, subreddit_id, link_id, topic_label, sentiment, body_cleaned
+        final_columns = [
+            "id",
+            "subreddit_id",
+            "link_id",
+            "topic_label",
+            "sentiment",
+            "body_cleaned",
         ]
+        # Ensure all final columns exist, add with NA if missing from processing steps
+        for col in final_columns:
+            if col not in comments_df.columns:
+                comments_df[col] = pd.NA
+
+        final_df = comments_df[final_columns]
 
         ensure_dir(output_dir)
         if output_filename:
@@ -307,7 +363,7 @@ class CommentProcessor:
             base_name = comments_file_path.stem.replace(
                 ".json", ""
             )  # e.g., comments_2016-11
-            save_path = output_dir / f"{base_name}_topics_sentiment.jsonl"
+            save_path = output_dir / f"{base_name}_lda_topics_sentiment.jsonl"
 
         final_df.to_json(save_path, orient="records", lines=True, force_ascii=False)
         total_time = time.time() - start_time
@@ -318,7 +374,7 @@ class CommentProcessor:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Process monthly Reddit comments for topic modeling and sentiment analysis."
+        description="Process monthly Reddit comments for topic modeling (LDA) and sentiment analysis."
     )
     parser.add_argument(
         "--comments_file_path",
@@ -335,8 +391,8 @@ def main():
     parser.add_argument(
         "--output_dir_name",
         type=str,
-        default="comments_topic_sentiment",
-        help="Name of the subdirectory within data/processed/ to save results. Defaults to 'comments_topic_sentiment'.",
+        default="comments_lda_topic_sentiment",
+        help="Name of the subdirectory within data/processed/ to save results. Defaults to 'comments_lda_topic_sentiment'.",
     )
     parser.add_argument(
         "--sentiment_device",
@@ -344,6 +400,24 @@ def main():
         choices=["cpu", "cuda"],
         default=None,  # Auto-detect
         help="Device for sentiment model ('cpu' or 'cuda'). Defaults to auto-detect (cuda if available).",
+    )
+    parser.add_argument(
+        "--num_lda_topics",
+        type=int,
+        default=15,
+        help="Number of topics for LDA model. Defaults to 15.",
+    )
+    parser.add_argument(
+        "--lda_passes",
+        type=int,
+        default=10,
+        help="Number of passes for LDA training. Defaults to 10.",
+    )
+    parser.add_argument(
+        "--lda_iterations",
+        type=int,
+        default=50,
+        help="Number of iterations for LDA training. Defaults to 50.",
     )
     # Potentially add --subreddits_file_path if needed for specific runs
 
@@ -355,7 +429,6 @@ def main():
 
     users_metadata_full_path = None
     if args.users_metadata_file:
-        # If a relative path is given, assume it's relative to data/metadata/
         if not args.users_metadata_file.is_absolute():
             users_metadata_full_path = (
                 project_root / "data" / "metadata" / args.users_metadata_file
@@ -366,11 +439,11 @@ def main():
             print(
                 f"Warning: Provided users metadata file {users_metadata_full_path} does not exist. Bot filtering will be skipped."
             )
-            users_metadata_full_path = None  # Reset to skip
-    else:  # Default path if not provided
+            users_metadata_full_path = None
+    else:
         default_users_metadata_path = (
             project_root / "data" / "metadata" / "users_metadata.jsonl"
-        )  # or .json if that's the actual name
+        )
         if default_users_metadata_path.exists():
             users_metadata_full_path = default_users_metadata_path
             print(f"Using default users metadata file: {users_metadata_full_path}")
@@ -381,8 +454,11 @@ def main():
 
     processor = CommentProcessor(
         users_metadata_file=users_metadata_full_path,
-        seed_topic_list=DEFAULT_SEED_TOPICS,  # Using the default from topic_modeling.py
+        seed_topic_list=DEFAULT_SEED_TOPICS,
         sentiment_model_device=args.sentiment_device,
+        num_lda_topics=args.num_lda_topics,
+        lda_passes=args.lda_passes,
+        lda_iterations=args.lda_iterations,
     )
 
     processor.process_single_month_file(

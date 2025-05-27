@@ -2,6 +2,26 @@ import pandas as pd
 from bertopic import BERTopic
 from typing import List, Dict, Tuple, Optional
 
+# Added imports for LDA
+import gensim
+from gensim import corpora, models
+from gensim.utils import simple_preprocess
+from gensim.parsing.preprocessing import STOPWORDS as GENSIM_STOPWORDS
+from nltk.stem import WordNetLemmatizer, SnowballStemmer
+from nltk.tokenize import word_tokenize
+import nltk
+from collections import Counter
+
+# Ensure NLTK resources are available (run this once if needed)
+try:
+    nltk.data.find("corpora/wordnet")
+except LookupError:
+    nltk.download("wordnet")
+try:
+    nltk.data.find("tokenizers/punkt")
+except LookupError:
+    nltk.download("punkt")
+
 
 class GuidedTopicModeler:
     """Performs guided topic modeling using BERTopic."""
@@ -249,11 +269,335 @@ DEFAULT_SEED_TOPICS = [
     ["scandal", "emails", "Access Hollywood", "WikiLeaks", "Comey", "FBI"],
 ]
 
+
+class LdaTopicModeler:
+    """Performs topic modeling using LDA with Gensim and maps topics to predefined seeds."""
+
+    def __init__(
+        self,
+        seed_topic_list: List[List[str]],
+        num_lda_topics: Optional[int] = None,  # Number of topics for LDA to find
+        passes: int = 10,
+        iterations: int = 50,
+        min_word_length: int = 3,
+        lemmatize: bool = True,
+    ):
+        self.seed_topic_list = seed_topic_list
+        self.num_predefined_topics = len(seed_topic_list)
+        # If num_lda_topics is not specified, set it slightly higher than predefined
+        # to allow some flexibility, or equal if precise matching is desired.
+        # For now, let's aim to match it closely.
+        self.num_lda_topics = (
+            num_lda_topics if num_lda_topics is not None else self.num_predefined_topics
+        )
+
+        self.passes = passes
+        self.iterations = iterations
+        self.min_word_length = min_word_length
+        self.lemmatize_flag = lemmatize
+        self.dictionary: Optional[corpora.Dictionary] = None
+        self.lda_model: Optional[models.LdaModel] = None
+        self.lda_to_predefined_mapping: Dict[int, str] = (
+            {}
+        )  # Maps LDA topic ID to predefined label
+        self.predefined_topic_labels: List[str] = [
+            f"TOPIC_{i}_-" + "_".join(seeds[:3])
+            for i, seeds in enumerate(self.seed_topic_list)
+        ]
+
+        if self.lemmatize_flag:
+            self.lemmatizer = WordNetLemmatizer()
+
+    def _lemmatize(self, text: str) -> str:
+        if not self.lemmatize_flag:
+            return text
+        return " ".join(
+            [self.lemmatizer.lemmatize(word) for word in word_tokenize(text)]
+        )
+
+    def _preprocess_text(self, document: str) -> List[str]:
+        """Tokenizes, removes stopwords, and optionally lemmatizes."""
+        processed_tokens = []
+        # Lemmatize first if flag is set
+        text_to_process = (
+            self._lemmatize(document.lower())
+            if self.lemmatize_flag
+            else document.lower()
+        )
+
+        for token in simple_preprocess(
+            text_to_process, deacc=True
+        ):  # simple_preprocess handles tokenization and lowercasing
+            if token not in GENSIM_STOPWORDS and len(token) >= self.min_word_length:
+                processed_tokens.append(token)
+        return processed_tokens
+
+    def _map_lda_topics_to_predefined(self):
+        """Maps trained LDA topics to the closest predefined seed topics."""
+        if not self.lda_model or not self.dictionary:
+            print("Error: LDA model not trained yet.")
+            return
+
+        self.lda_to_predefined_mapping = {}
+        unmapped_lda_topics = set(range(self.num_lda_topics))
+
+        # Prepare predefined topic seed sets for faster lookup
+        predefined_seed_sets = [
+            set(self._preprocess_text(" ".join(seeds)))
+            for seeds in self.seed_topic_list
+        ]
+
+        lda_topic_words = []
+        for i in range(self.num_lda_topics):
+            # Get top N words for each LDA topic
+            top_words = [word for word, prob in self.lda_model.show_topic(i, topn=15)]
+            lda_topic_words.append(set(top_words))
+
+        # Iterate through each predefined topic and find the best matching LDA topic
+        assigned_lda_topics = set()
+        for predefined_idx, seed_set in enumerate(predefined_seed_sets):
+            if not seed_set:
+                continue  # Skip if seed set is empty after preprocessing
+
+            best_lda_topic_idx = -1
+            max_similarity = -1.0
+
+            for lda_idx in unmapped_lda_topics:
+                if lda_idx in assigned_lda_topics:
+                    continue  # Already assigned to a different predefined topic
+
+                lda_words_set = lda_topic_words[lda_idx]
+                if not lda_words_set:
+                    continue
+
+                # Jaccard similarity
+                intersection_len = len(lda_words_set.intersection(seed_set))
+                union_len = len(lda_words_set.union(seed_set))
+                similarity = intersection_len / union_len if union_len > 0 else 0.0
+
+                if similarity > max_similarity:
+                    max_similarity = similarity
+                    best_lda_topic_idx = lda_idx
+
+            # Assign if a reasonable match is found (e.g., similarity > 0.05 or at least one word overlap)
+            # This threshold might need tuning.
+            # And ensure an LDA topic is not assigned to multiple predefined topics.
+            if (
+                best_lda_topic_idx != -1
+                and max_similarity > 0.01
+                and best_lda_topic_idx not in assigned_lda_topics
+            ):
+                self.lda_to_predefined_mapping[best_lda_topic_idx] = (
+                    self.predefined_topic_labels[predefined_idx]
+                )
+                assigned_lda_topics.add(best_lda_topic_idx)
+                print(
+                    f"Mapped Predefined Topic '{self.predefined_topic_labels[predefined_idx]}' to LDA Topic {best_lda_topic_idx} (Similarity: {max_similarity:.2f})"
+                )
+
+        # Handle any LDA topics that couldn't be mapped to a predefined one
+        # (e.g., give them a generic label or mark as 'UNMAPPED_LDA_TOPIC_X')
+        for lda_idx in range(self.num_lda_topics):
+            if lda_idx not in self.lda_to_predefined_mapping:
+                unmapped_label = f"UNMAPPED_LDA_TOPIC_{lda_idx}"
+                # Try to get top words for unmapped LDA topic for a more descriptive label
+                try:
+                    top_unmapped_words = "_".join(
+                        [word for word, _ in self.lda_model.show_topic(lda_idx, 3)]
+                    )
+                    unmapped_label = f"LDA_TOPIC_{lda_idx}_{top_unmapped_words}"
+                except Exception:
+                    pass  # Stick to generic if words can't be fetched
+                self.lda_to_predefined_mapping[lda_idx] = unmapped_label
+                print(
+                    f"LDA Topic {lda_idx} could not be mapped to a predefined topic. Labeled as '{unmapped_label}'."
+                )
+
+        print(f"Final LDA to Predefined Mapping: {self.lda_to_predefined_mapping}")
+
+    def fit_transform(
+        self,
+        aggregated_texts_df: pd.DataFrame,
+        text_column: str = "merged_body_cleaned",
+    ) -> pd.DataFrame:
+        """
+        Fits LDA model to aggregated texts and assigns predefined topic labels.
+
+        Args:
+            aggregated_texts_df (pd.DataFrame): DataFrame with 'link_id' and a text column
+                                                (e.g., 'merged_body_cleaned').
+            text_column (str): Name of the column containing the aggregated text.
+
+        Returns:
+            pd.DataFrame: The input DataFrame with an added 'topic_label' column.
+        """
+        if aggregated_texts_df.empty or text_column not in aggregated_texts_df.columns:
+            print(
+                "Warning: Aggregated texts DataFrame is empty or lacks the text column. Skipping LDA."
+            )
+            aggregated_texts_df["topic_label"] = "NO_TOPIC_EMPTY_INPUT"
+            return aggregated_texts_df
+
+        documents = aggregated_texts_df[text_column].astype(str).fillna("").tolist()
+        preprocessed_docs = [self._preprocess_text(doc) for doc in documents]
+        preprocessed_docs = [
+            doc for doc in preprocessed_docs if doc
+        ]  # Remove empty docs after preprocessing
+
+        if not preprocessed_docs:
+            print(
+                "Warning: No processable documents after preprocessing. Skipping LDA."
+            )
+            aggregated_texts_df["topic_label"] = "NO_TOPIC_PREPROCESSING_EMPTY"
+            return aggregated_texts_df
+
+        self.dictionary = corpora.Dictionary(preprocessed_docs)
+        # Filter extremes: remove tokens that appear in less than 5 documents or more than 50% of the documents
+        self.dictionary.filter_extremes(
+            no_below=5, no_above=0.5
+        )  # These values may need tuning
+
+        corpus = [self.dictionary.doc2bow(doc) for doc in preprocessed_docs]
+        # Filter out empty items in corpus (documents that had all their words filtered out)
+        # And keep track of original indices to map back
+        original_indices = [i for i, c in enumerate(corpus) if c]
+        filtered_corpus = [c for c in corpus if c]
+
+        if not filtered_corpus:
+            print("Warning: Corpus is empty after dictionary filtering. Skipping LDA.")
+            aggregated_texts_df["topic_label"] = "NO_TOPIC_EMPTY_CORPUS"
+            return aggregated_texts_df
+
+        print(
+            f"Training LDA model with {self.num_lda_topics} topics on {len(filtered_corpus)} documents..."
+        )
+        self.lda_model = models.LdaModel(
+            corpus=filtered_corpus,
+            id2word=self.dictionary,
+            num_topics=self.num_lda_topics,
+            passes=self.passes,
+            iterations=self.iterations,
+            random_state=42,  # For reproducibility
+            # alpha='auto', # Let gensim learn alpha
+            # eta='auto' # Let gensim learn eta
+        )
+
+        self._map_lda_topics_to_predefined()
+
+        # Assign topics to the original documents that made it into the filtered_corpus
+        doc_topics = [
+            self.lda_model.get_document_topics(filtered_corpus[i])
+            for i in range(len(filtered_corpus))
+        ]
+
+        assigned_topic_labels = []
+        for i in range(len(doc_topics)):
+            # Get the LDA topic with the highest probability for the current document
+            if doc_topics[i]:  # Check if topics were assigned
+                best_lda_topic_id = sorted(
+                    doc_topics[i], key=lambda x: x[1], reverse=True
+                )[0][0]
+                assigned_topic_labels.append(
+                    self.lda_to_predefined_mapping.get(
+                        best_lda_topic_id, "UNKNOWN_TOPIC"
+                    )
+                )
+            else:
+                assigned_topic_labels.append(
+                    "NO_TOPIC_ASSIGNED"
+                )  # Document couldn't be assigned a topic by LDA
+
+        # Create a temporary series for merging, aligning with original_indices
+        topic_labels_series = pd.Series(
+            assigned_topic_labels, index=aggregated_texts_df.index[original_indices]
+        )
+
+        # Add topic_label column to the input DataFrame
+        aggregated_texts_df["topic_label"] = topic_labels_series
+        # Fill NaNs for documents that were filtered out or couldn't be processed
+        aggregated_texts_df["topic_label"].fillna("NO_TOPIC_FILTERED_OUT", inplace=True)
+
+        print("LDA Topic modeling complete.")
+        print(f"Topic counts:\n{aggregated_texts_df['topic_label'].value_counts()}")
+        return aggregated_texts_df
+
+    def get_topic_info(self) -> Optional[List[Tuple[int, List[Tuple[str, float]]]]]:
+        """Returns information about the generated LDA topics (top words)."""
+        if self.lda_model:
+            return self.lda_model.show_topics(
+                num_topics=self.num_lda_topics, num_words=10, formatted=False
+            )
+        return None
+
+    def get_lda_to_predefined_mapping(self) -> Dict[int, str]:
+        """Returns the mapping of LDA topic IDs to predefined topic labels."""
+        return self.lda_to_predefined_mapping
+
+
 if __name__ == "__main__":
     # This is a placeholder for direct testing if needed.
     # Actual execution will be orchestrated by sentiment_analysis.py
-    print("GuidedTopicModeler class defined. Ready for use in a pipeline.")
+    print(
+        "GuidedTopicModeler and LdaTopicModeler classes defined. Ready for use in a pipeline."
+    )
 
+    # Minimal example for GuidedTopicModeler (existing):
+    # ... (keep existing BERTopic test if desired, or comment out) ...
+
+    print("\n--- Testing LdaTopicModeler with sample data ---")
+    # Sample data: Each row is an "aggregated thread"
+    lda_sample_data = {
+        "link_id": [
+            "t3_link1",
+            "t3_link2",
+            "t3_link3",
+            "t3_link4",
+            "t3_link5",
+            "t3_link6",
+            "t3_link7",
+        ],
+        "merged_body_cleaned": [
+            "Several comments discussing Donald Trump, his MAGA campaign, and Republican strategies for the election. Trump Trump Trump.",  # doc 0
+            "This thread is all about Hillary Clinton, her emails controversy, and what Democrats think. Clinton emails.",  # doc 1
+            "Lots of talk about the election itself, polls, voter concerns, and media bias. election polls vote.",  # doc 2
+            "A heated discussion on gun control, the second amendment, NRA, and recent shootings. gun control NRA.",  # doc 3
+            "Economic issues are the focus here: jobs, taxes, trade deficits. economy jobs taxes.",  # doc 4
+            "A long thread about healthcare, Obamacare, and the Affordable Care Act. healthcare obamacare.",  # doc 5
+            "This document is different and talks about kittens and puppies for variety.",  # doc 6 (potential outlier)
+        ],
+    }
+    sample_aggregated_df = pd.DataFrame(lda_sample_data)
+
+    # Initialize LdaTopicModeler
+    lda_topic_modeler = LdaTopicModeler(
+        seed_topic_list=DEFAULT_SEED_TOPICS,
+        num_lda_topics=len(
+            DEFAULT_SEED_TOPICS
+        ),  # Aim for one LDA topic per seed initially
+        passes=1,  # Fewer passes for quick test
+        iterations=10,  # Fewer iterations for quick test
+        lemmatize=False,  # Lemmatization can be slow for quick tests; NLTK setup might also be needed
+    )
+
+    # Perform LDA topic modeling
+    aggregated_with_topics_df = lda_topic_modeler.fit_transform(
+        sample_aggregated_df, text_column="merged_body_cleaned"
+    )
+
+    print("\nAggregated Texts with LDA Topics:")
+    print(aggregated_with_topics_df)
+
+    print("\nLDA Topic Info (Top words per LDA topic):")
+    lda_topic_info = lda_topic_modeler.get_topic_info()
+    if lda_topic_info:
+        for i, topic in lda_topic_info:
+            words = ", ".join([w[0] for w in topic])
+            print(f"LDA Topic {i}: {words}")
+
+    print("\nLDA Topic ID to Predefined Label Mapping:")
+    print(lda_topic_modeler.get_lda_to_predefined_mapping())
+
+    print("\n--- BERTopic Test (Original) ---")
     # Minimal example:
     # Ensure you have a sample DataFrame to test with
     data = {
@@ -268,10 +612,10 @@ if __name__ == "__main__":
             "outlier comment that does not fit any topic well and is short",
         ],
     }
-    sample_comments_df = pd.DataFrame(data)
+    sample_comments_df_bert = pd.DataFrame(data)
 
     print("\n--- Testing GuidedTopicModeler with sample data ---")
-    topic_modeler = GuidedTopicModeler(
+    topic_modeler_bert = GuidedTopicModeler(
         seed_topic_list=DEFAULT_SEED_TOPICS,
         min_topic_size=1,  # min_topic_size=1 for small test sample
         disable_reduction_for_small_datasets=True,  # Disable UMAP for small test datasets
@@ -279,24 +623,24 @@ if __name__ == "__main__":
 
     # Ensure 'body_cleaned' exists and is not all null
     if (
-        "body_cleaned" in sample_comments_df.columns
-        and not sample_comments_df["body_cleaned"].isnull().all()
+        "body_cleaned" in sample_comments_df_bert.columns
+        and not sample_comments_df_bert["body_cleaned"].isnull().all()
     ):
-        comments_with_topics_df, topic_map = topic_modeler.fit_transform(
-            sample_comments_df, text_column="body_cleaned"
+        comments_with_topics_df_bert, topic_map_bert = topic_modeler_bert.fit_transform(
+            sample_comments_df_bert, text_column="body_cleaned"
         )
-        print("\nComments with Topics:")
-        print(comments_with_topics_df)
+        print("\nComments with Topics (BERTopic):")
+        print(comments_with_topics_df_bert)
         print("\nTopic Info from BERTopic model:")
-        topic_info = topic_modeler.get_topic_info()
-        if topic_info is not None:
-            print(topic_info)
+        topic_info_bert = topic_modeler_bert.get_topic_info()
+        if topic_info_bert is not None:
+            print(topic_info_bert)
         else:
             print(
                 "No topic info available (model likely not fitted or error occurred)."
             )
-        print("\nGenerated Topic ID to Label Mapping:")
-        print(topic_map)
+        print("\nGenerated Topic ID to Label Mapping (BERTopic):")
+        print(topic_map_bert)
     else:
         print(
             "Skipping GuidedTopicModeler test due to missing or all-null 'body_cleaned' column in sample data."
