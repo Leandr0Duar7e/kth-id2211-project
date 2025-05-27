@@ -976,28 +976,44 @@ class SimpleLdaTopicModeler:
         Returns:
             pd.DataFrame: The input DataFrame with an added 'topic_id' column.
         """
+        # Initialize topic_id column with -1 (default for empty or error cases)
+        aggregated_texts_df["topic_id"] = -1
+
+        # Check if input is valid
         if aggregated_texts_df.empty or text_column not in aggregated_texts_df.columns:
             print(
                 "Warning: Aggregated texts DataFrame is empty or lacks the text column. Skipping LDA."
             )
-            aggregated_texts_df["topic_id"] = -1
+            return aggregated_texts_df
+
+        # Explicitly mark empty texts with topic_id = -1
+        empty_mask = aggregated_texts_df[text_column].astype(str).str.strip() == ""
+        if empty_mask.all():
+            print("Warning: All texts are empty. Skipping LDA.")
             return aggregated_texts_df
 
         # Just tokenize by whitespace since text is already cleaned
-        documents = aggregated_texts_df[text_column].astype(str).fillna("").tolist()
+        # Focus only on non-empty documents
+        non_empty_df = aggregated_texts_df[~empty_mask].copy()
+        documents = non_empty_df[text_column].astype(str).fillna("").tolist()
         preprocessed_docs = [self._preprocess_text(doc) for doc in documents]
-        # Remove documents that become too short after preprocessing (e.g., < 5 words)
-        preprocessed_docs = [doc for doc in preprocessed_docs if len(doc) >= 5]
 
-        if not preprocessed_docs:
+        # Remove documents that become too short after preprocessing (e.g., < 5 words)
+        valid_indices = []
+        filtered_preprocessed_docs = []
+        for i, doc in enumerate(preprocessed_docs):
+            if len(doc) >= 5:
+                valid_indices.append(i)
+                filtered_preprocessed_docs.append(doc)
+
+        if not filtered_preprocessed_docs:
             print(
                 "Warning: No processable documents after preprocessing (all too short). Skipping LDA."
             )
-            aggregated_texts_df["topic_id"] = -1
             return aggregated_texts_df
 
         # Create dictionary and corpus - with filtering optimized for meaningful topics
-        self.dictionary = corpora.Dictionary(preprocessed_docs)
+        self.dictionary = corpora.Dictionary(filtered_preprocessed_docs)
 
         # Apply more aggressive filtering for political content:
         # - no_below=3: Remove terms that appear in fewer than 3 documents (remove rare terms)
@@ -1005,21 +1021,18 @@ class SimpleLdaTopicModeler:
         # - keep_n=3000: Keep only the top 3000 most frequent terms after filtering (more aggressive)
         self.dictionary.filter_extremes(no_below=3, no_above=0.6, keep_n=3000)
 
-        corpus = [self.dictionary.doc2bow(doc) for doc in preprocessed_docs]
+        corpus = [self.dictionary.doc2bow(doc) for doc in filtered_preprocessed_docs]
 
         # Filter empty items in corpus (documents with no words left after dictionary filtering)
-        valid_indices_texts_map = {
-            i: aggregated_texts_df.index[original_idx]
-            for i, (original_idx, c) in enumerate(
-                zip(aggregated_texts_df.index, corpus)
-            )
-            if c
-        }
-        filtered_corpus = [c for c in corpus if c]
+        valid_corpus_indices = []
+        filtered_corpus = []
+        for i, bow in enumerate(corpus):
+            if bow:  # Not empty
+                valid_corpus_indices.append(valid_indices[i])
+                filtered_corpus.append(bow)
 
         if not filtered_corpus:
             print("Warning: Corpus is empty after dictionary filtering. Skipping LDA.")
-            aggregated_texts_df["topic_id"] = -1
             return aggregated_texts_df
 
         # Train LDA model with adjusted alpha and eta parameters for political content
@@ -1051,22 +1064,15 @@ class SimpleLdaTopicModeler:
             ]
             self.topic_words[topic_id] = ", ".join(top_words)
 
-        # Assign topics to documents
-        aggregated_texts_df["topic_id"] = -1  # Default value for all rows initially
-
+        # Assign topics to documents - only for those that made it through the filtering process
         for i, corpus_doc in enumerate(filtered_corpus):
-            original_df_idx = valid_indices_texts_map[i]
-            if corpus_doc:  # Ensure document is not empty
-                topic_dist = self.lda_model.get_document_topics(
-                    corpus_doc, minimum_probability=0.15
-                )
-                if topic_dist:  # Check if any topic meets the probability threshold
-                    dominant_topic = max(topic_dist, key=lambda x: x[1])[0]
-                    aggregated_texts_df.loc[original_df_idx, "topic_id"] = (
-                        dominant_topic
-                    )
-                # else: keep as -1 if no topic is strong enough
-            # else: keep as -1 if doc was empty after bow creation (should be rare now)
+            original_df_idx = non_empty_df.index[valid_corpus_indices[i]]
+            topic_dist = self.lda_model.get_document_topics(
+                corpus_doc, minimum_probability=0.15
+            )
+            if topic_dist:  # Check if any topic meets the probability threshold
+                dominant_topic = max(topic_dist, key=lambda x: x[1])[0]
+                aggregated_texts_df.loc[original_df_idx, "topic_id"] = dominant_topic
 
         print("LDA topic modeling complete.")
         topic_counts = aggregated_texts_df["topic_id"].value_counts()

@@ -4,6 +4,8 @@ from pathlib import Path
 import time
 from typing import List, Dict, Any, Optional, Set
 import json
+import os
+import gc  # For garbage collection
 
 from transformers import (
     AutoTokenizer,
@@ -152,135 +154,258 @@ class CommentProcessor:
         comments_file_path: Path,
         output_dir: Path,
         output_filename: Optional[str] = None,
+        chunk_size: int = 50000,  # Process in chunks of 50k comments
     ):
         """
         Processes a comments file: loads, topics, sentiments, and saves.
+        Now processes data in chunks to reduce memory usage.
+
+        Args:
+            comments_file_path: Path to the comments file (.bz2 or .json)
+            output_dir: Directory to save results
+            output_filename: Optional custom filename for output
+            chunk_size: Number of comments to process in each chunk
         """
         print(f"\n--- Processing {comments_file_path.name} ---")
         start_time = time.time()
 
-        # 1. Load comments
-        print("Step 1: Loading comments...")
-        if comments_file_path.suffix == ".bz2":
-            comments_df = pd.read_json(
-                comments_file_path, lines=True, compression="bz2"
-            )
-        else:
-            comments_df = pd.read_json(comments_file_path, lines=True)
-
-        # Ensure required columns exist
-        required_cols = ["id", "link_id"]
-        for col in required_cols:
-            if col not in comments_df.columns:
-                print(f"Error: Required column '{col}' not found in comments file.")
-                return
-
-        # Use body_cleaned if it exists, otherwise use body
-        if "body_cleaned" not in comments_df.columns:
-            if "body" in comments_df.columns:
-                comments_df["body_cleaned"] = comments_df["body"].astype(str).fillna("")
-            else:
-                print(
-                    "Error: Neither 'body_cleaned' nor 'body' found in comments file."
-                )
-                return
-
-        print(f"Loaded {len(comments_df)} comments.")
-
-        # 2. Perform topic modeling on aggregated texts
-        print("\nStep 2: Performing LDA topic modeling on aggregated texts...")
-
-        # Aggregate comments by link_id
-        aggregated_texts_df = (
-            comments_df.groupby("link_id")["body_cleaned"]
-            .apply(
-                lambda x: " ".join(
-                    str(text)
-                    for text in x
-                    if pd.notna(text) and str(text).strip() != ""
-                )
-            )
-            .reset_index()
-        )
-        aggregated_texts_df.rename(
-            columns={"body_cleaned": "merged_body_cleaned"}, inplace=True
-        )
-        aggregated_texts_df = aggregated_texts_df[
-            aggregated_texts_df["merged_body_cleaned"].str.strip() != ""
-        ]
-
-        if aggregated_texts_df.empty:
-            print("No non-empty threads to model topics for. Assigning default topic.")
-            comments_df["topic_id"] = -1
-        else:
-            # Apply topic modeling
-            aggregated_texts_with_topics_df = self.topic_modeler.fit_transform(
-                aggregated_texts_df, text_column="merged_body_cleaned"
-            )
-
-            # Merge topics back to comments
-            thread_topics_df = aggregated_texts_with_topics_df[["link_id", "topic_id"]]
-            comments_df = pd.merge(
-                comments_df, thread_topics_df, on="link_id", how="left"
-            )
-            comments_df["topic_id"] = comments_df["topic_id"].fillna(-1).astype(int)
-
-            # Print topics summary
-            print("\n--- LDA Topic Summary ---")
-            topic_words = self.topic_modeler.get_topic_words()
-            for topic_id, words in topic_words.items():
-                print(f"Topic {topic_id}: {words}")
-            print("--- End LDA Topic Summary ---\n")
-
-        # 3. Sentiment Analysis (on individual comments)
-        print("\nStep 3: Performing sentiment analysis on individual comments...")
-
-        # Skip empty comments
-        comments_df["is_empty"] = (
-            comments_df["body_cleaned"].astype(str).str.strip().eq("")
-        )
-        non_empty_mask = ~comments_df["is_empty"]
-
-        # Initialize sentiment column with None
-        comments_df["sentiment"] = None
-
-        if non_empty_mask.any():
-            texts_for_sentiment = comments_df.loc[
-                non_empty_mask, "body_cleaned"
-            ].tolist()
-            sentiments = self.sentiment_analyzer.predict_sentiment_batch(
-                texts_for_sentiment, batch_size=64
-            )
-            comments_df.loc[non_empty_mask, "sentiment"] = sentiments
-
-        # Clean up
-        comments_df = comments_df.drop(columns=["is_empty"])
-
-        # 4. Save results
-        print("\nStep 4: Finalizing and saving results...")
-
-        # Select columns to save
-        final_columns = ["id", "link_id", "topic_id", "sentiment", "body_cleaned"]
-        for col in final_columns:
-            if col not in comments_df.columns:
-                comments_df[col] = None
-
-        final_df = comments_df[final_columns]
-
-        # Create output directory and save
+        # Create output directory
         ensure_dir(output_dir)
+
+        # Determine output filename
         if output_filename:
             save_path = output_dir / output_filename
         else:
             base_name = comments_file_path.stem.replace(".json", "")
             save_path = output_dir / f"{base_name}_topics_sentiment.jsonl"
 
-        final_df.to_json(save_path, orient="records", lines=True, force_ascii=False)
+        # Check if file already exists and remove if it does
+        if save_path.exists():
+            os.remove(save_path)
+            print(f"Removed existing output file: {save_path}")
 
-        total_time = time.time() - start_time
-        print(f"Successfully processed and saved to {save_path}")
-        print(f"Total time: {total_time:.2f} seconds.")
-        print(f"Sample of final data:\n{final_df.head()}")
+        # Initialize chunking parameters
+        total_comments = 0
+        chunk_counter = 0
+        total_chunks_processed = 0
+
+        # Process in chunks
+        chunk_reader = None
+
+        try:
+            # Set up chunk reader based on file type
+            if comments_file_path.suffix == ".bz2":
+                chunk_reader = pd.read_json(
+                    comments_file_path,
+                    lines=True,
+                    compression="bz2",
+                    chunksize=chunk_size,
+                )
+            else:
+                chunk_reader = pd.read_json(
+                    comments_file_path, lines=True, chunksize=chunk_size
+                )
+
+            # First pass: Get all unique link_ids and aggregate their content
+            print("First pass: Collecting and aggregating threads (link_ids)...")
+            aggregated_threads = {}
+
+            for chunk_df in chunk_reader:
+                chunk_counter += 1
+                total_comments += len(chunk_df)
+                print(
+                    f"Reading chunk {chunk_counter} with {len(chunk_df)} comments... (Total so far: {total_comments})"
+                )
+
+                # Ensure required columns exist
+                if "link_id" not in chunk_df.columns:
+                    print(
+                        "Error: Required column 'link_id' not found in comments file."
+                    )
+                    return
+
+                # Use body_cleaned if it exists, otherwise use body
+                if "body_cleaned" not in chunk_df.columns:
+                    if "body" in chunk_df.columns:
+                        chunk_df["body_cleaned"] = (
+                            chunk_df["body"].astype(str).fillna("")
+                        )
+                    else:
+                        print(
+                            "Error: Neither 'body_cleaned' nor 'body' found in comments file."
+                        )
+                        return
+
+                # Aggregate comments by link_id within this chunk
+                for link_id, group in chunk_df.groupby("link_id"):
+                    texts = [
+                        str(text)
+                        for text in group["body_cleaned"]
+                        if pd.notna(text) and str(text).strip() != ""
+                    ]
+                    if texts:  # Only add if there are non-empty texts
+                        if link_id in aggregated_threads:
+                            aggregated_threads[link_id].extend(texts)
+                        else:
+                            aggregated_threads[link_id] = texts
+
+            # Reset chunk reader for second pass
+            if comments_file_path.suffix == ".bz2":
+                chunk_reader = pd.read_json(
+                    comments_file_path,
+                    lines=True,
+                    compression="bz2",
+                    chunksize=chunk_size,
+                )
+            else:
+                chunk_reader = pd.read_json(
+                    comments_file_path, lines=True, chunksize=chunk_size
+                )
+
+            # Create DataFrame for topic modeling
+            print("\nStep 2: Performing LDA topic modeling on aggregated texts...")
+            aggregated_texts_df = pd.DataFrame(
+                {
+                    "link_id": list(aggregated_threads.keys()),
+                    "merged_body_cleaned": [
+                        " ".join(texts) for texts in aggregated_threads.values()
+                    ],
+                }
+            )
+
+            # Free up memory
+            del aggregated_threads
+            gc.collect()
+
+            # Check if we have threads to model
+            if aggregated_texts_df.empty:
+                print(
+                    "No non-empty threads to model topics for. Assigning default topic."
+                )
+                thread_topics_df = pd.DataFrame(columns=["link_id", "topic_id"])
+            else:
+                # Apply topic modeling
+                aggregated_texts_with_topics_df = self.topic_modeler.fit_transform(
+                    aggregated_texts_df, text_column="merged_body_cleaned"
+                )
+
+                # Get thread topics mapping
+                thread_topics_df = aggregated_texts_with_topics_df[
+                    ["link_id", "topic_id"]
+                ]
+
+                # Print topics summary
+                print("\n--- LDA Topic Summary ---")
+                topic_words = self.topic_modeler.get_topic_words()
+                for topic_id, words in topic_words.items():
+                    print(f"Topic {topic_id}: {words}")
+                print("--- End LDA Topic Summary ---\n")
+
+            # Free up memory
+            del aggregated_texts_df
+            gc.collect()
+
+            # Second pass: Process each chunk for sentiment and merge with topic assignments
+            print("\nProcessing chunks for sentiment analysis and saving results...")
+            chunk_counter = 0
+
+            for chunk_df in chunk_reader:
+                chunk_counter += 1
+                total_chunks_processed += 1
+                print(
+                    f"Processing chunk {chunk_counter} with {len(chunk_df)} comments..."
+                )
+
+                # Ensure body_cleaned exists
+                if "body_cleaned" not in chunk_df.columns:
+                    if "body" in chunk_df.columns:
+                        chunk_df["body_cleaned"] = (
+                            chunk_df["body"].astype(str).fillna("")
+                        )
+                    else:
+                        continue  # Skip this chunk if no body content
+
+                # Merge thread topics into comments
+                if not thread_topics_df.empty:
+                    chunk_df = pd.merge(
+                        chunk_df, thread_topics_df, on="link_id", how="left"
+                    )
+                    chunk_df["topic_id"] = chunk_df["topic_id"].fillna(-1).astype(int)
+                else:
+                    chunk_df["topic_id"] = -1
+
+                # Explicitly assign -1 topic to empty comments
+                chunk_df.loc[
+                    chunk_df["body_cleaned"].astype(str).str.strip() == "", "topic_id"
+                ] = -1
+
+                # Skip empty comments for sentiment analysis
+                chunk_df["is_empty"] = (
+                    chunk_df["body_cleaned"].astype(str).str.strip().eq("")
+                )
+                non_empty_mask = ~chunk_df["is_empty"]
+
+                # Initialize sentiment column with None
+                chunk_df["sentiment"] = None
+
+                # Only run sentiment analysis if we have non-empty comments
+                if non_empty_mask.any():
+                    texts_for_sentiment = chunk_df.loc[
+                        non_empty_mask, "body_cleaned"
+                    ].tolist()
+                    try:
+                        sentiments = self.sentiment_analyzer.predict_sentiment_batch(
+                            texts_for_sentiment, batch_size=64
+                        )
+                        chunk_df.loc[non_empty_mask, "sentiment"] = sentiments
+                    except Exception as e:
+                        print(f"Error during sentiment analysis: {e}")
+                        # Continue with processing, but mark sentiments as None
+
+                # Clean up
+                chunk_df = chunk_df.drop(columns=["is_empty"])
+
+                # Select columns to save
+                final_columns = [
+                    "id",
+                    "link_id",
+                    "topic_id",
+                    "sentiment",
+                    "body_cleaned",
+                ]
+                for col in final_columns:
+                    if col not in chunk_df.columns:
+                        chunk_df[col] = None
+
+                final_df = chunk_df[final_columns]
+
+                # Append to output file
+                if chunk_counter == 1:  # First chunk, create the file
+                    final_df.to_json(
+                        save_path, orient="records", lines=True, force_ascii=False
+                    )
+                else:  # Append to existing file
+                    with open(save_path, "a", encoding="utf-8") as f:
+                        final_df.to_json(
+                            f, orient="records", lines=True, force_ascii=False
+                        )
+
+                # Free up memory
+                del chunk_df, final_df
+                gc.collect()
+
+            total_time = time.time() - start_time
+            print(f"Successfully processed and saved to {save_path}")
+            print(f"Total comments processed: {total_comments}")
+            print(f"Total chunks processed: {total_chunks_processed}")
+            print(f"Total time: {total_time:.2f} seconds.")
+
+        except Exception as e:
+            print(f"Error processing file: {e}")
+            import traceback
+
+            traceback.print_exc()
+            return
 
 
 def main():
@@ -330,6 +455,12 @@ def main():
         default=64,
         help="Batch size for sentiment analysis. Larger values may be faster but use more memory. Defaults to 64.",
     )
+    parser.add_argument(
+        "--chunk_size",
+        type=int,
+        default=50000,
+        help="Number of comments to process in each chunk. Defaults to 50000.",
+    )
 
     args = parser.parse_args()
 
@@ -345,7 +476,9 @@ def main():
     )
 
     processor.process_comments_file(
-        comments_file_path=args.comments_file_path, output_dir=final_output_dir
+        comments_file_path=args.comments_file_path,
+        output_dir=final_output_dir,
+        chunk_size=args.chunk_size,
     )
 
 
