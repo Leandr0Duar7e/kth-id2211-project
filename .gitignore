@@ -4,6 +4,7 @@ sample_test/
 .python-version*
 venv310/
 comments_topic_sentiment/
+comments_topics/
 
 Resources/
 NeurIPS-Template/
