@@ -27,15 +27,6 @@ As part of our broader exploration, we initiated work on:
 
 Due to the computational intensity and time constraints, this comprehensive sentiment and topic analysis pipeline was set aside for future work, with the core of this project focusing on the KarmaNet methodology and its evaluation. The foundational scripts for this are available in the `src` directory (e.g., `run_sentiment_analysis.py`, `run_topic_modeling.py`).
 
-## Key Scripts
-
-*   `src/networks_eda.ipynb`: Jupyter notebook for initial EDA (less relevant for the final KarmaNet focus).
-*   `src/step0_analysis.py`: Script for temporal shortest path analysis (part of initial explorations).
-*   `src/visualize_networks_by_metadata.py`: For visualizing networks with metadata (used in initial explorations).
-*   **[Main Scripts for KarmaNet are integrated within the broader project structure and methodologies described in the report, often involving data processing pipelines and custom functions not isolated to single runnable scripts for the core graph construction and analysis.]** (Self-correction: The user mentioned specific scripts for sentiment/topic, so I should ensure these are highlighted if they were indeed central to the *exploratory* part mentioned).
-*   `src/run_sentiment_analysis.py`, `src/sentiment_analysis.py`: Scripts for the sentiment analysis pipeline using RoBERTa.
-*   `src/run_topic_modeling.py`, `src/topic_modeling.py`: Scripts for the LDA topic modeling pipeline.
-
 ## Full Report
 
 For a comprehensive understanding of our methodology, detailed findings, and in-depth analysis of KarmaNet, please refer to our full project report:
